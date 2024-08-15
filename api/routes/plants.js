@@ -12,6 +12,8 @@ sql.connect(dbConfig_PROD, (err) => {
     console.log('Connected to the Database SSI-PC/PROD');
 });
 
+// test branch dev
+
 router.get('/', async (req, res) => {
   try {
     const tagBM2_con = await sql.query`SELECT TagBallMill_Conveyor.TagName, TagBallMill_Conveyor.TagIndex FROM [BallMill_Con_LOG].[dbo].[TagBallMill_Conveyor]`;
