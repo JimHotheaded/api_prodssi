@@ -27,7 +27,12 @@ router.get('/', async (req, res) => {
     const tagRMM2 = await sql.query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
 
     res.json([
-      {"message":"//how to use// {host}:3334/plants/{plant_id}/all,{tag_id}/{time_before}/{time_after}/avg  #example: http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg or http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"},
+      {"message":"//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg  #example: http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg or http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"},
+      {"function_list":["/{plant}=get all tagIndex",
+                        "/{plant}/{tag_id}=get lastest tagIndex data",
+                        "/{plant}/all=query top 1000",
+                        "/{plant}/{tag_id}/{time_before}/{time_after}/avg=average data",
+                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}=count choosen tagdata between choosen time frame and filter with larger selected threshold"]},
       {"BM2_con":"BallMill2 Conveyor","tags":tagBM2_con.recordset},
       {"BM2":"BallMill2","tags":tagBM2.recordset},
       // {"BM1":"BallMill1","tags":tagCT6_con.recordset},
