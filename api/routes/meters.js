@@ -14,7 +14,15 @@ sql.connect(dbConfig_CENTER, (err) => {
 
 router.get('/', async (req, res) => {
   try {
-    res.json({"message":"//how to use// {host}:3333/meters/name,data/{tag_id}/{time_before}/{time_after}/sum,avg #example:http://172.30.1.112:3333/meters/data/kWhCSH/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/sum or http://172.30.1.112:3333/meters/count?tag=kWCSH&tbf=2024-07-01%2000:00:00.000&taf=2024-07-31%2000:00:00.000&threshold=10"});
+    res.json([{"message":"//how to use// {host}:3333/meters/name,data/{tag_id}/{time_before}/{time_after}/sum,avg #example:http://172.30.1.112:3333/meters/data/kWhCSH/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/sum or http://172.30.1.112:3333/meters/count?tag=kWCSH&tbf=2024-07-01%2000:00:00.000&taf=2024-07-31%2000:00:00.000&threshold=10"},
+      {"function_list":["/name    ==show all meter parameters.",
+        "/data    ==>query top 1000 data in database.",
+        "/data/{tag_id}/{time_before}/{time_after}    ==query choosen meter parameter data in choosen timeframe.",
+        "/data/{tag_id}/{time_before}/{time_after}/sum    ==sum choosen meter paremeter data in choosen timeframe.//for Energy Consumption Report",
+        "/data/{tag_id}/{time_before}/{time_after}/avg    ==average choosen meter parameter data in choosen timeframe.",
+        "/count?tag={tagName}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold"
+      ]}
+]);
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
