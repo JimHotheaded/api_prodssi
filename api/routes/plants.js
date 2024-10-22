@@ -38,7 +38,7 @@ router.get('/', async (req, res) => {
       // {"BM1":"BallMill1","tags":tagCT6_con.recordset},
       {"CT6_con":"Coating6 Conveyor","tags":tagCT6_con.recordset},
       {"CT6_heater":"Coating6 Heater","tags":tagCT6_heater.recordset},
-      {"CT7_con":"Coating7 Conveyor","tags":tagCT7_con}.recordset,
+      {"CT7_con":"Coating7 Conveyor","tags":tagCT7_con.recordset},
       {"CT7_heater":"Coating7 Heater","tags":tagCT7_heater.recordset},
       {"CSH":"Crushing","tags":tagCSH.recordset},
       {"FeedRaw":"FeedRaw Material VM/BM1/BM2","tags":tagFeedRaw.recordset},

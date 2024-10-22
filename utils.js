@@ -46,5 +46,27 @@ function findMax(data, field) {
         throw new Error(`Unknown operator: ${operator}`);
     }
   }
+  
+  function generateDateStringsForMonth(year, month, startTime1, endTime1, startTime2, endTime2) {
+    const dates = [];
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+  
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayString = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      dates.push({
+        startDateTime1: `${dayString} ${startTime1}`,
+        endDateTime1: `${dayString} ${endTime1}`,
+        startDateTime2: `${dayString} ${startTime2}`,
+        endDateTime2: `${dayString} ${endTime2}`,
+      });
+    }
+  
+    return dates;
+  }
+  
+  function calculateCustomTimeFrame(data, field) {
+    if (!data || data.length === 0) return 0;
+    
+  }
 
-  module.exports = { findMax, findMin, calculateAverage, returnTagName, countValues };
+  module.exports = { findMax, findMin, calculateAverage, returnTagName, countValues, calculateCustomTimeFrame, generateDateStringsForMonth };
