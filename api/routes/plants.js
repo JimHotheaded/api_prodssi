@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
-const { findMax, findMin, calculateAverage, returnTagName, countValues } = require('../../utils');
+const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap } = require('../../utils');
 const {dbConfig_PROD} = require('../../config');
 
 sql.connect(dbConfig_PROD, (err) => {
@@ -533,6 +533,28 @@ ORDER BY DateAndTime DESC`;
   const minVal = findMin(data, 'Val');
   const avgVal = calculateAverage(data, 'Val');
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/CT7_con/:tagIndex/:tbf/:taf/calCap', async (req, res) => {
+  const {tagIndex,tbf,taf} = req.params;
+  try {
+    const result = await sql.query`
+  SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
+FROM [Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
+INNER JOIN Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+ORDER BY DateAndTime DESC`;
+  const data = result.recordset;
+  const tagName = returnTagName(data);
+  const maxVal = findMax(data, 'Val');
+  const minVal = findMin(data, 'Val');
+  const capVal = calCap(data, 'Val');
+  res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, cap: capVal});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');

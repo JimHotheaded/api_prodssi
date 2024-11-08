@@ -17,6 +17,18 @@ function findMax(data, field) {
     return total / data.length;
   }
   
+  function calSum(data, field) {
+    if (!data || data.length === 0) return null;
+    const total = data.reduce((sum, item) => sum + item[field], 0);
+    return total;
+  }
+
+  function calCap(data, field) {
+    if (!data || data.length === 0) return null;
+    const total = data.reduce((sum, item) => sum + item[field], 0);
+    return total/6;
+  }
+
   function returnTagName(data) {
     if (!data || data.length === 0) return null;
     return data[0].TagName
@@ -69,4 +81,13 @@ function findMax(data, field) {
     
   }
 
-  module.exports = { findMax, findMin, calculateAverage, returnTagName, countValues, calculateCustomTimeFrame, generateDateStringsForMonth };
+  module.exports = {  findMax, 
+                      findMin, 
+                      calculateAverage, 
+                      returnTagName, 
+                      countValues, 
+                      calculateCustomTimeFrame, 
+                      generateDateStringsForMonth,
+                      calSum,
+                      calCap
+                    };
