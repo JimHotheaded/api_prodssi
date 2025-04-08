@@ -59,6 +59,33 @@ function findMax(data, field) {
     }
   }
   
+  // const total = data.reduce((sum, item) => sum + item[field], 0);
+  // return total;
+  function calSumFilter(data, field, operator, value) {
+    if (!data || data.length === 0) return null;
+    
+    switch (operator) {
+      case '>':
+        return data.reduce((count, item) => (item[field] > value ? count + 1 : count), 0);
+      case '<':
+        return data.reduce((count, item) => (item[field] < value ? count + 1 : count), 0);
+      case '>=':
+        return data.reduce((count, item) => (item[field] >= value ? count + 1 : count), 0);
+      case '<=':
+        return data.reduce((count, item) => (item[field] <= value ? count + 1 : count), 0);
+      case '==':
+        return data.reduce((count, item) => (item[field] == value ? count + 1 : count), 0);
+      case '===':
+        return data.reduce((count, item) => (item[field] === value ? count + 1 : count), 0);
+      case '!=':
+        return data.reduce((count, item) => (item[field] != value ? count + 1 : count), 0);
+      case '!==':
+        return data.reduce((count, item) => (item[field] !== value ? count + 1 : count), 0);
+      default:
+        throw new Error(`Unknown operator: ${operator}`);
+    }
+  }
+
   function generateDateStringsForMonth(year, month, startTime1, endTime1, startTime2, endTime2) {
     const dates = [];
     const daysInMonth = new Date(year, month + 1, 0).getDate();
