@@ -25,9 +25,12 @@ router.get('/', async (req, res) => {
     const tagHYD = await sql.query`SELECT TagHydraulic.TagName, TagHydraulic.TagIndex FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic]`;
     const tagRMM1 = await sql.query`SELECT TagRayMondMill.TagName, TagRayMondMill.TagIndex FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill]`;
     const tagRMM2 = await sql.query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
+    const tagWL = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`;
 
     res.json([
-      {"message":"//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg  #example: http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg or http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"},
+      {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
+                        "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
+                        "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
@@ -44,7 +47,8 @@ router.get('/', async (req, res) => {
       {"FeedRaw":"FeedRaw Material VM/BM1/BM2","tags":tagFeedRaw.recordset},
       {"HYD":"Hydraulics Vertical Roller Mill","tags":tagHYD.recordset},
       {"RMM1":"Raymond Mill1","tags":tagRMM1.recordset},
-      {"RMM2":"Raymond Mill2","tags":tagRMM2.recordset}]);
+      {"RMM2":"Raymond Mill2","tags":tagRMM2.recordset},
+      {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset}]);
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -903,7 +907,7 @@ router.get('/HYD/all', async (req, res) => {
   try {
     const result = await sql.query`
   SELECT TOP (1000) FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
-FROM [REPL_Hydraulic_Log].[dbo].[FloatValue]
+FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
@@ -918,7 +922,7 @@ router.get('/HYD/:tagIndex', async (req, res) => {
   try {
     const result = await sql.query`
   SELECT TOP (1) FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
-FROM [REPL_Hydraulic_Log].[dbo].[FloatValue]
+FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 and FloatHydraulic.TagIndex = ${tagIndex}
 ORDER BY DateAndTime DESC`;
@@ -935,7 +939,7 @@ router.get('/HYD/:tagIndex/:tbf/:taf', async (req, res) => {
     try {
       const result = await sql.query`
   SELECT FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
-FROM [REPL_Hydraulic_Log].[dbo].[FloatValue]
+FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
@@ -1194,5 +1198,138 @@ ORDER BY DateAndTime DESC`;
     res.status(500).send('Server error');
   }
 });
+
+
+router.get('/WL/all', async (req, res) => {
+try {
+  const result = await sql.query`
+  SELECT TOP(1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/WL/:tagIndex', async (req, res) => {
+  const {tagIndex} = req.params;
+  try {
+    const result = await sql.query`
+  SELECT TOP (1) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+and FloatTable.TagIndex = ${tagIndex}
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+//tbf=time before, taf=time after
+router.get('/WL/:tagIndex/:tbf/:taf', async (req, res) => {
+    const {tagIndex,tbf,taf} = req.params;
+    try {
+      const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+ORDER BY DateAndTime DESC`;
+      res.json(result.recordset);
+    } catch (err) {
+      console.error('Database query error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+
+router.get('/WL/:tagIndex/:tbf/:taf/asc', async (req, res) => {
+    const {tagIndex,tbf,taf} = req.params;
+    try {
+      const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+ORDER BY DateAndTime ASC`;
+      res.json(result.recordset);
+    } catch (err) {
+      console.error('Database query error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+
+router.get('/WL/:tagIndex/:tbf/:taf/datacal', async (req, res) => {
+  const {tagIndex,tbf,taf} = req.params;
+  try {
+    const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+ORDER BY DateAndTime DESC`;
+  const data = result.recordset;
+  const tagName = returnTagName(data);
+  const maxVal = findMax(data, 'Val');
+  const minVal = findMin(data, 'Val');
+  const avgVal = calculateAverage(data, 'Val')*2;
+  const sumVal = calSum(data, 'Val');
+  const count = countValues(data, 'Val', '!=', 0);
+  res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, sum: sumVal, avg: avgVal, count: count});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/countWL', async (req, res) => {
+  const {tagIndex,tbf,taf,threshold} = req.query;
+  const thresholdValue = Number(threshold);
+  try {
+    const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_WL_Log].[dbo].[FloatTable]
+INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+ORDER BY DateAndTime DESC`;
+    const data = result.recordset;
+    const count = countValues(data, 'Val', '>', thresholdValue);
+    const hour = count/360;
+    const tagName = returnTagName(data);
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+// router.get('/WL/:tagIndex/:tbf/:taf/sum', async (req, res) => {
+//   const {tagIndex,tbf,taf} = req.params;
+//   try {
+//     const result = await sql.query`
+//   SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+// FROM [REPL_WL_Log].[dbo].[FloatTable]
+// INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+// WHERE DateAndTime between ${tbf} and ${taf}
+// and FloatTable.TagIndex = ${tagIndex}
+// ORDER BY DateAndTime ASC`;
+//     const data = result.recordset;
+//     const maxVal = findMax(data, 'Val');
+//     const minVal = findMin(data, 'Val');
+//     const sumVal = calSum(data, 'Val');
+//     res.json({meter: tag, date_before:tbf, date_after:taf, max: maxVal, min: minVal, sum: sumVal});
+//   } catch (err) {
+//     console.error('Database query error:', err);
+//     res.status(500).send('Server error');
+//   }
+// });
 
 module.exports = router;
