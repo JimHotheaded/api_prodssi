@@ -1200,9 +1200,25 @@ ORDER BY DateAndTime DESC`;
 });
 
 
-router.get('/WL/all', async (req, res) => {
+router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
+   const {tagIndex,tbf,taf} = req.params;
 try {
   const result = await sql.query`
+  SELECT FloatTable.DateAndTime,TagTable.TagName,FloatTable.Val 
+FROM [REPL_WL_LOG].[dbo].[FloatTable]
+INNER JOIN REPL_WL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+ORDER BY DateAndTime ASC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/WL/all', async (req, res) => {
+  try {
+    const result = await sql.query`
   SELECT TOP(1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
 FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
