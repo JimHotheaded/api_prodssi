@@ -1200,21 +1200,21 @@ ORDER BY DateAndTime DESC`;
 });
 
 
-router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
-   const {tagIndex,tbf,taf} = req.params;
-try {
-  const result = await sql.query`
-  SELECT FloatTable.DateAndTime,TagTable.TagName,FloatTable.Val 
-FROM [REPL_WL_LOG].[dbo].[FloatTable]
-INNER JOIN REPL_WL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
-WHERE DateAndTime between ${tbf} and ${taf}
-ORDER BY DateAndTime ASC`;
-    res.json(result.recordset);
-  } catch (err) {
-    console.error('Database query error:', err);
-    res.status(500).send('Server error');
-  }
-});
+// router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
+//    const {tbf,taf} = req.params;
+// try {
+//   const result = await sql.query`
+//   SELECT FloatTable.DateAndTime,TagTable.TagName,FloatTable.Val 
+// FROM [REPL_WL_LOG].[dbo].[FloatTable]
+// INNER JOIN REPL_WL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+// WHERE DateAndTime between ${tbf} and ${taf}
+// ORDER BY DateAndTime ASC`;
+//     res.json(result.recordset);
+//   } catch (err) {
+//     console.error('Database query error:', err);
+//     res.status(500).send('Server error');
+//   }
+// });
 
 router.get('/WL/all', async (req, res) => {
   try {
@@ -1247,7 +1247,7 @@ ORDER BY DateAndTime DESC`;
 });
 
 //tbf=time before, taf=time after
-router.get('/WL/:tagIndex/:tbf/:taf', async (req, res) => {
+router.get('/WL/:tagIndex/:tbf/:taf/ins', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
       const result = await sql.query`
@@ -1347,5 +1347,118 @@ ORDER BY DateAndTime DESC`;
 //     res.status(500).send('Server error');
 //   }
 // });
+
+router.get('/WL/pivotDataTest/:tbf/:taf', async (req, res) => {
+  const { tbf, taf } = req.params;
+
+  // all filters passed as query params, NOT as route params
+  const {
+    silo,
+    material,
+    wlno,
+    id,
+    minWeight,
+    maxWeight,
+    minId,
+    maxId
+  } = req.query;
+
+  try {
+    const result = await sql.query`
+      SELECT FloatTable.DateAndTime, TagTable.TagName, FloatTable.Val 
+      FROM [REPL_WL_LOG].[dbo].[FloatTable]
+      INNER JOIN REPL_WL_LOG.dbo.TagTable 
+      ON FloatTable.TagIndex = TagTable.TagIndex
+      WHERE DateAndTime BETWEEN ${tbf} AND ${taf}
+      ORDER BY DateAndTime ASC
+    `;
+
+    const rows = result.recordset;
+
+    // 1) Group + pivot
+    const grouped = {};
+
+    rows.forEach(row => {
+      if (row.Val === 0) return;
+
+      const dtKey = row.DateAndTime.toISOString();
+
+      if (!grouped[dtKey]) {
+        grouped[dtKey] = {
+          DateAndTime: row.DateAndTime,
+          id: null,       // BRS_INT[14]
+          WL_No: null,    // BRS_INT[08]
+          Weight: null,   // BRS_REAL[26]
+          Silo: null,     // BRS_DINT[3]
+          Material: null  // BRS_DINT[4]
+        };
+      }
+
+      switch (row.TagName) {
+        case "[PLC_Crushing]BRS_DINT[3]":
+          grouped[dtKey].Silo = row.Val;
+          break;
+        case "[PLC_Crushing]BRS_REAL[26]":
+          grouped[dtKey].Weight = row.Val;
+          break;
+        case "[PLC_Crushing]BRS_DINT[4]":
+          grouped[dtKey].Material = row.Val;
+          break;
+        case "[PLC_Crushing]BRS_INT[08]":
+          grouped[dtKey].WL_No = row.Val;
+          break;
+        case "[PLC_Crushing]BRS_INT[14]":
+          grouped[dtKey].id = row.Val;
+          break;
+      }
+    });
+
+    let data = Object.values(grouped);
+
+    // 2) Apply filters in JS (no type conversion problems in SQL)
+    if (silo)      data = data.filter(r => r.Silo === parseInt(silo, 10));
+    if (material)  data = data.filter(r => r.Material === parseInt(material, 10));
+    if (wlno)      data = data.filter(r => r.WL_No === parseInt(wlno, 10));
+    if (id)        data = data.filter(r => r.id === parseInt(id, 10));
+    if (minWeight) data = data.filter(r => r.Weight >= parseFloat(minWeight));
+    if (maxWeight) data = data.filter(r => r.Weight <= parseFloat(maxWeight));
+    if (minId)     data = data.filter(r => r.id >= parseInt(minId, 10));
+    if (maxId)     data = data.filter(r => r.id <= parseInt(maxId, 10));
+
+    // 3) Sort by time
+    data.sort((a, b) => a.DateAndTime - b.DateAndTime);
+
+    // 4) Summary
+    const cycles = data.length;
+    const totalWeight = data.reduce((sum, r) => sum + (r.Weight || 0), 0);
+    const avgWeight = cycles > 0 ? totalWeight / cycles : 0;
+
+    // 5) Format output
+    const formattedData = data.map(r => ({
+      DateAndTime: r.DateAndTime.toISOString(),
+      id: r.id,
+      WL_No: r.WL_No,
+      Weight: Number(r.Weight?.toFixed(2) || 0),
+      Silo: r.Silo,
+      Material: r.Material
+    }));
+
+    res.json({
+      tbf,
+      taf,
+      filters: req.query,
+      summary: {
+        cycles,
+        totalWeight: Number(totalWeight.toFixed(2)),
+        avgWeight: Number(avgWeight.toFixed(2))
+      },
+      data: formattedData
+    });
+
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
 
 module.exports = router;
