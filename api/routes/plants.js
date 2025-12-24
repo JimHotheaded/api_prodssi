@@ -71,6 +71,7 @@ router.get('/BM2_con/all', async (req, res) => {
   SELECT TOP (1000) FloatBallMill_Conveyor.DateAndTime,FloatBallMill_Conveyor.Val,FloatBallMill_Conveyor.TagIndex ,TagBallMill_Conveyor.TagName
 FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
 INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
+WHERE FloatBallMill_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -87,6 +88,7 @@ router.get('/BM2_con/:tagIndex', async (req, res) => {
   FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
   INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
+  and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -105,6 +107,7 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf', async (req, res) => {
   INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
   WHERE DateAndTime between ${tbf} and ${taf}
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
+  and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -122,6 +125,7 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
   WHERE DateAndTime between ${tbf} and ${taf}
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
+  and FloatBallMill_Conveyor.TagIndex <> 'E'
   ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -145,6 +149,7 @@ router.get('/countBM2_con', async (req, res) => {
   INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
   WHERE DateAndTime between ${tbf} and ${taf}
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
+  and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -173,6 +178,7 @@ router.get('/BM2/all', async (req, res) => {
   SELECT TOP (1000) FloatBallMill.DateAndTime,FloatBallMill.Val,FloatBallMill.TagIndex ,TagBallMill.TagName
 FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
 INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
+WHERE FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -189,6 +195,7 @@ router.get('/BM2/:tagIndex', async (req, res) => {
 FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
 INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 and FloatBallMill.TagIndex = ${tagIndex}
+WHERE FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -207,6 +214,7 @@ FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
 INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatBallMill.TagIndex = ${tagIndex}
+and FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -224,6 +232,7 @@ FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
 INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatBallMill.TagIndex = ${tagIndex}
+and FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -247,6 +256,7 @@ FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
 INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatBallMill.TagIndex = ${tagIndex}
+and FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -275,6 +285,7 @@ router.get('/CT6_con/all', async (req, res) => {
   SELECT TOP (1000) FloatCoating_MC6_Con.DateAndTime,FloatCoating_MC6_Con.Val,FloatCoating_MC6_Con.TagIndex ,TagCoating_MC6_Con.TagName
 FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
 INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
+WHERE FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -291,6 +302,7 @@ router.get('/CT6_con/:tagIndex', async (req, res) => {
 FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
 INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -309,6 +321,7 @@ FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
 INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -326,6 +339,7 @@ FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
 INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -349,6 +363,7 @@ FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
 INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -377,6 +392,7 @@ router.get('/CT6_heater/all', async (req, res) => {
   SELECT TOP (1000) FloatCoating_MC6_Heater.DateAndTime,FloatCoating_MC6_Heater.Val,FloatCoating_MC6_Heater.TagIndex ,TagCoating_MC6_Heater.TagName
 FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
 INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
+WHERE FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -393,6 +409,7 @@ router.get('/CT6_heater/:tagIndex', async (req, res) => {
 FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
 INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -411,6 +428,7 @@ FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
 INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -428,6 +446,7 @@ FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
 INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -451,6 +470,7 @@ FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
 INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
+and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -479,6 +499,7 @@ router.get('/CT7_con/all', async (req, res) => {
   SELECT TOP (1000) FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
+WHERE FloatCoating_MC7_Conveyor.Status <>'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -495,6 +516,7 @@ router.get('/CT7_con/:tagIndex', async (req, res) => {
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+and FloatCoating_MC7_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -513,6 +535,7 @@ FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+and FloatCoating_MC7_Conveyor.Status <>'E
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -530,6 +553,7 @@ FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+and FloatCoating_MC7_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -552,6 +576,7 @@ FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+and FloatCoating_MC7_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -575,6 +600,7 @@ FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
+and FloatCoating_MC7_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -603,6 +629,7 @@ router.get('/CT7_heater/all', async (req, res) => {
   SELECT TOP (1000) FloatCoating_MC7.DateAndTime,FloatCoating_MC7.Val,FloatCoating_MC7.TagIndex ,TagCoating_MC7.TagName
 FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
 INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
+WHERE FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -619,6 +646,7 @@ router.get('/CT7_heater/:tagIndex', async (req, res) => {
 FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
 INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 and FloatCoating_MC7.TagIndex = ${tagIndex}
+and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -637,6 +665,7 @@ FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
 INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7.TagIndex = ${tagIndex}
+and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -654,6 +683,7 @@ FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
 INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7.TagIndex = ${tagIndex}
+and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -677,6 +707,7 @@ FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
 INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7.TagIndex = ${tagIndex}
+and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -705,6 +736,7 @@ router.get('/CSH/all', async (req, res) => {
   SELECT TOP (1000) FloatValue.DateAndTime,FloatValue.Val,FloatValue.TagIndex ,TagName.TagName
 FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
+WHERE FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -721,6 +753,7 @@ router.get('/CSH/:tagIndex', async (req, res) => {
 FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 and FloatValue.TagIndex = ${tagIndex}
+and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -739,6 +772,7 @@ FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatValue.TagIndex = ${tagIndex}
+and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -756,6 +790,7 @@ FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatValue.TagIndex = ${tagIndex}
+and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -779,6 +814,7 @@ FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatValue.TagIndex = ${tagIndex}
+and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -807,6 +843,7 @@ router.get('/FeedRaw/all', async (req, res) => {
   SELECT TOP (1000) FloatFeedRaw.DateAndTime,FloatFeedRaw.Val,FloatFeedRaw.TagIndex ,TagFeedRaw.TagName
 FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
 INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
+WHERE FloatFeedRaw.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -823,6 +860,7 @@ router.get('/FeedRaw/:tagIndex', async (req, res) => {
 FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
 INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
 and FloatFeedRaw.TagIndex = ${tagIndex}
+and FloatFeedRaw.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -841,6 +879,7 @@ router.get('/FeedRaw/:tagIndex/:tbf/:taf', async (req, res) => {
   INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
   WHERE DateAndTime between ${tbf} and ${taf}
   and FloatFeedRaw.TagIndex = ${tagIndex}
+  and FloatFeedRaw.Status <> 'E'
   ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -858,6 +897,7 @@ FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
 INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatFeedRaw.TagIndex = ${tagIndex}
+and FloatFeedRaw.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -881,6 +921,7 @@ FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
 INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatFeedRaw.TagIndex = ${tagIndex}
+and FloatFeedRaw.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -909,6 +950,7 @@ router.get('/HYD/all', async (req, res) => {
   SELECT TOP (1000) FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
 FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
+WHERE FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -925,6 +967,7 @@ router.get('/HYD/:tagIndex', async (req, res) => {
 FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 and FloatHydraulic.TagIndex = ${tagIndex}
+and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -943,6 +986,7 @@ FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
+and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -960,6 +1004,7 @@ FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
+and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -983,6 +1028,7 @@ FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
 INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
+and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -1011,6 +1057,7 @@ router.get('/RMM1/all', async (req, res) => {
   SELECT TOP (1000) FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
 FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
 INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
+WHERE FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1027,6 +1074,7 @@ router.get('/RMM1/:tagIndex', async (req, res) => {
 FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
 INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 and FloatRayMondMill.TagIndex = ${tagIndex}
+and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1045,6 +1093,7 @@ FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
 INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
+and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -1062,6 +1111,7 @@ FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
 INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
+and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -1085,6 +1135,7 @@ FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
 INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
+and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -1113,6 +1164,7 @@ router.get('/RMM2/all', async (req, res) => {
   SELECT TOP(1000) FloatRaymondMill2.DateAndTime,FloatRaymondMill2.Val,FloatRaymondMill2.TagIndex ,TagRaymondMill2.TagName
 FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
 INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
+WHERE FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1129,6 +1181,7 @@ router.get('/RMM2/:tagIndex', async (req, res) => {
 FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
 INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 and FloatRaymondMill2.TagIndex = ${tagIndex}
+and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1147,6 +1200,7 @@ FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
 INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRaymondMill2.TagIndex = ${tagIndex}
+and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -1164,6 +1218,7 @@ FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
 INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRaymondMill2.TagIndex = ${tagIndex}
+and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -1187,6 +1242,7 @@ FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
 INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRaymondMill2.TagIndex = ${tagIndex}
+and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -1200,21 +1256,22 @@ ORDER BY DateAndTime DESC`;
 });
 
 
-// router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
-//    const {tbf,taf} = req.params;
-// try {
-//   const result = await sql.query`
-//   SELECT FloatTable.DateAndTime,TagTable.TagName,FloatTable.Val 
-// FROM [REPL_WL_LOG].[dbo].[FloatTable]
-// INNER JOIN REPL_WL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
-// WHERE DateAndTime between ${tbf} and ${taf}
-// ORDER BY DateAndTime ASC`;
-//     res.json(result.recordset);
-//   } catch (err) {
-//     console.error('Database query error:', err);
-//     res.status(500).send('Server error');
-//   }
-// });
+router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
+   const {tbf,taf} = req.params;
+try {
+  const result = await sql.query`
+  SELECT FloatTable.DateAndTime,TagTable.TagName,FloatTable.Val 
+FROM [REPL_WL_LOG].[dbo].[FloatTable]
+INNER JOIN REPL_WL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime ASC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
 
 router.get('/WL/all', async (req, res) => {
   try {
@@ -1222,6 +1279,7 @@ router.get('/WL/all', async (req, res) => {
   SELECT TOP(1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
 FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1238,6 +1296,7 @@ router.get('/WL/:tagIndex', async (req, res) => {
 FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1256,6 +1315,7 @@ FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -1273,6 +1333,7 @@ FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
 ORDER BY DateAndTime ASC`;
       res.json(result.recordset);
     } catch (err) {
@@ -1290,6 +1351,7 @@ FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -1315,6 +1377,7 @@ FROM [REPL_WL_Log].[dbo].[FloatTable]
 INNER JOIN REPL_WL_Log.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
@@ -1348,7 +1411,7 @@ ORDER BY DateAndTime DESC`;
 //   }
 // });
 
-router.get('/WL/pivotDataTest/:tbf/:taf', async (req, res) => {
+router.get('/WL/pivotDataFilter/:tbf/:taf', async (req, res) => {
   const { tbf, taf } = req.params;
 
   // all filters passed as query params, NOT as route params
@@ -1370,6 +1433,7 @@ router.get('/WL/pivotDataTest/:tbf/:taf', async (req, res) => {
       INNER JOIN REPL_WL_LOG.dbo.TagTable 
       ON FloatTable.TagIndex = TagTable.TagIndex
       WHERE DateAndTime BETWEEN ${tbf} AND ${taf}
+      and FloatTable.Status <> 'E'
       ORDER BY DateAndTime ASC
     `;
 
