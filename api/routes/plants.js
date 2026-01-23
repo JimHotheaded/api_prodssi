@@ -26,7 +26,8 @@ router.get('/', async (req, res) => {
     const tagRMM1 = await sql.query`SELECT TagRayMondMill.TagName, TagRayMondMill.TagIndex FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill]`;
     const tagRMM2 = await sql.query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
     const tagWL = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`;
-
+    const tagRRM = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
+    
     res.json([
       {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
                         "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
@@ -48,7 +49,9 @@ router.get('/', async (req, res) => {
       {"HYD":"Hydraulics Vertical Roller Mill","tags":tagHYD.recordset},
       {"RMM1":"Raymond Mill1","tags":tagRMM1.recordset},
       {"RMM2":"Raymond Mill2","tags":tagRMM2.recordset},
-      {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset}]);
+      {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset},
+      {"RRM":"RingRollerMill","tags":tagRRM.recordset}
+    ]);
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
