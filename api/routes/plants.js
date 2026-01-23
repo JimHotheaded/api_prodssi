@@ -55,6 +55,8 @@ router.get('/', async (req, res) => {
   }
 });
 
+/////////////////////////////////////////////
+
 router.get('/BM2_con', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagBallMill_Conveyor.TagName, TagBallMill_Conveyor.TagIndex FROM [REPL_BallMill_Conveyor_LOG].[dbo].[TagBallMill_Conveyor]`;
@@ -161,6 +163,8 @@ router.get('/countBM2_con', async (req, res) => {
     res.status(500).send('Server error');
   }
 });
+
+///////////////////////////////////////////
 
 router.get('/BM2', async (req, res) => {
   try {
@@ -269,6 +273,8 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+////////////////////////////////////////////
+
 router.get('/CT6_con', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagCoating_MC6_Con.TagName, TagCoating_MC6_Con.TagIndex FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con]`;
@@ -375,6 +381,8 @@ ORDER BY DateAndTime DESC`;
     res.status(500).send('Server error');
   }
 });
+
+////////////////////////////////////////////////
 
 router.get('/CT6_heater', async (req, res) => {
   try {
@@ -483,6 +491,8 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+/////////////////////////////////////////////
+
 router.get('/CT7_con', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagCoating_MC7_Conveyor.TagName, TagCoating_MC7_Conveyor.TagIndex FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor]`;
@@ -535,7 +545,7 @@ FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
 INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
-and FloatCoating_MC7_Conveyor.Status <>'E
+and FloatCoating_MC7_Conveyor.Status <>'E'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -612,6 +622,8 @@ ORDER BY DateAndTime DESC`;
     res.status(500).send('Server error');
   }
 });
+
+///////////////////////////////////////////////
 
 router.get('/CT7_heater', async (req, res) => {
   try {
@@ -720,6 +732,117 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+/////////////////////////////////////////
+
+router.get('/RRM', async (req, res) => {
+  try {
+    const result = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/RRM/all', async (req, res) => {
+  try {
+    const result = await sql.query`
+  SELECT TOP (1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_RingRollerMill].[dbo].[FloatTable]
+INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/RRM/:tagIndex', async (req, res) => {
+  const {tagIndex} = req.params;
+  try {
+    const result = await sql.query`
+  SELECT TOP (1) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_RingRollerMill].[dbo].[FloatTable]
+INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+//tbf=time before, taf=time after
+router.get('/RRM/:tagIndex/:tbf/:taf', async (req, res) => {
+    const {tagIndex,tbf,taf} = req.params;
+    try {
+      const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_RingRollerMill].[dbo].[FloatTable]
+INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+      res.json(result.recordset);
+    } catch (err) {
+      console.error('Database query error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+
+router.get('/RRM/:tagIndex/:tbf/:taf/avg', async (req, res) => {
+  const {tagIndex,tbf,taf} = req.params;
+  try {
+    const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_RingRollerMill].[dbo].[FloatTable]
+INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+  const data = result.recordset;
+  const tagName = returnTagName(data);
+  const maxVal = findMax(data, 'Val');
+  const minVal = findMin(data, 'Val');
+  const avgVal = calculateAverage(data, 'Val');
+  res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/countRRM', async (req, res) => {
+  const {tagIndex,tbf,taf,threshold} = req.query;
+  const thresholdValue = Number(threshold);
+  try {
+    const result = await sql.query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_RingRollerMill].[dbo].[FloatTable]
+INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    const data = result.recordset;
+    const count = countValues(data, 'Val', '>', thresholdValue);
+    const hour = count/360;
+    const tagName = returnTagName(data);
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+/////////////////////////////////////////////////
+
 router.get('/CSH', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagName.TagName, TagName.TagIndex FROM [REPL_Crushing_Log].[dbo].[TagName]`;
@@ -826,6 +949,8 @@ ORDER BY DateAndTime DESC`;
     res.status(500).send('Server error');
   }
 });
+
+//////////////////////////////////////////////
 
 router.get('/FeedRaw', async (req, res) => {
   try {
@@ -934,6 +1059,8 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+////////////////////////////////////////
+
 router.get('/HYD', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagHydraulic.TagName, TagHydraulic.TagIndex FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic]`;
@@ -1040,6 +1167,8 @@ ORDER BY DateAndTime DESC`;
     res.status(500).send('Server error');
   }
 });
+
+/////////////////////////////////////////
 
 router.get('/RMM1', async (req, res) => {
   try {
@@ -1148,6 +1277,8 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+/////////////////////////////////////////
+
 router.get('/RMM2', async (req, res) => {
   try {
     const result = await sql.query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
@@ -1255,6 +1386,7 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
+////////////////////////////////////////////////////////////
 
 router.get('/WL/pivotData/:tbf/:taf', async (req, res) => {
    const {tbf,taf} = req.params;
