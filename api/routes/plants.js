@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
-const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap } = require('../../utils');
+const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, isHoliday } = require('../../utils');
 const {dbConfig_PROD} = require('../../config');
 
 sql.connect(dbConfig_PROD, (err) => {
@@ -27,7 +27,7 @@ router.get('/', async (req, res) => {
     const tagRMM2 = await sql.query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
     const tagWL = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`;
     const tagRRM = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
-    
+
     res.json([
       {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
                         "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
@@ -946,7 +946,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
