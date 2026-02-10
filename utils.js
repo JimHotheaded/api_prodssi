@@ -107,7 +107,6 @@ function findMax(data, field) {
     if (!data || data.length === 0) return 0;
     
   }
-
 const holidays = [
   "2025-01-01", "2025-02-12", "2025-04-15", "2025-04-14",
   "2025-05-01", "2025-06-03", "2025-07-10", "2025-07-11",
@@ -119,7 +118,6 @@ const holidays = [
   "2026-08-12", "2026-10-13", "2026-10-23",
   "2026-12-10", "2026-12-31"
 ];
-
 
 /**
  * Count data points that match (item[field] operator value),
@@ -251,5 +249,6 @@ function isHoliday(date) {
                       calSum,
                       calCap,
                       countValuesHour,
-                      isHoliday
+                      isHoliday,
                     };
+                  

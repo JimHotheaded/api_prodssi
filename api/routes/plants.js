@@ -160,7 +160,14 @@ router.get('/countBM2_con', async (req, res) => {
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -269,7 +276,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -378,7 +392,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -487,7 +508,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -619,7 +647,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -728,7 +763,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -837,7 +879,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1062,7 +1111,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1171,7 +1227,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1280,7 +1343,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1389,7 +1459,14 @@ ORDER BY DateAndTime DESC`;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/360;
     const tagName = returnTagName(data);
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
