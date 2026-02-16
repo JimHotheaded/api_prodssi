@@ -59,8 +59,7 @@ function findMax(data, field) {
     }
   }
   
-  // const total = data.reduce((sum, item) => sum + item[field], 0);
-  // return total;
+
   function calSumFilter(data, field, operator, value) {
     if (!data || data.length === 0) return null;
     
@@ -239,7 +238,127 @@ function isHoliday(date) {
   return holidaySet.has(yyyyMMdd) || day === 0 || day === 6;
 }
 
-  module.exports = {  findMax, 
+function groupUsageByTariff(rawData, holidays = []) {
+    // --- helper: shift date by -7 hours (align timestamps to GMT+7 logic) ---
+    function shiftMinus7(dateInput) {
+        const d = new Date(dateInput);
+        d.setHours(d.getHours() - 7);
+        return d;
+    }
+
+    // --- ensure array ---
+    let data = rawData;
+
+    if (typeof data === "string") data = JSON.parse(data);
+    if (!Array.isArray(data) && data && typeof data === "object") {
+        data = Object.values(data);
+    }
+
+    if (!Array.isArray(data)) {
+        throw new Error("msg.payload must be an array");
+    }
+
+    // --- filter valid rows ---
+    data = data.filter(r =>
+        r &&
+        r.DateAndTime &&
+        typeof r.Val === "number" &&
+        !Number.isNaN(new Date(r.DateAndTime).getTime())
+    );
+
+    // --- sort oldest → newest ---
+    data.sort((a, b) =>
+        new Date(a.DateAndTime).getTime() - new Date(b.DateAndTime).getTime()
+    );
+
+    if (data.length < 2) {
+        return { error: "Not enough data points" };
+    }
+
+    const holidaySet = new Set(holidays);
+
+    // --- get range (shifted) ---
+    const dateStart = new Date(data[0].DateAndTime);
+    const dateEnd   = new Date(data[data.length - 1].DateAndTime);
+
+    // ---- list holidays inside the range (shifted) ----
+    // Use local midnight string, then shift -7 to keep comparison consistent with dt usage
+    const holidayListUsed = holidays.filter(h => {
+        const hd = shiftMinus7(h + "T14:00:00");
+        return hd >= dateStart && hd <= dateEnd;
+    });
+
+    const holidayCount = holidayListUsed.length;
+
+    let totals = { A: 0, B: 0, C: 0, D: 0 };
+
+    // ✅ weekend list/count (unique days)
+    const weekendDateSet = new Set();
+
+    for (let i = 0; i < data.length - 1; i++) {
+        const older = data[i];
+        const newer = data[i + 1];
+
+        // ✅ shifted timestamp for classification
+        const dt = shiftMinus7(older.DateAndTime);
+
+        // actual usage = newer - older
+        const usage = newer.Val - older.Val;
+        if (usage < 0) continue;
+
+        const day = dt.getDay();    // 0=Sun,6=Sat
+        const hour = dt.getHours();
+
+        // build date string YYYY-MM-DD (from shifted dt)
+        const y = dt.getFullYear();
+        const m = String(dt.getMonth() + 1).padStart(2, "0");
+        const d = String(dt.getDate()).padStart(2, "0");
+        const dateStr = `${y}-${m}-${d}`;
+
+        // ✅ collect weekend unique dates
+        if (day === 0 || day === 6) {
+            weekendDateSet.add(dateStr);
+        }
+
+        let category;
+
+        if (day === 0 || day === 6 || holidaySet.has(dateStr)) {
+            if (hour >= 6 && hour < 18) {
+                category = "C";
+            } else {
+                category = "D";
+            }
+        } else if (hour >= 9 && hour < 22) {
+            category = "A";
+        } else {
+            category = "B";
+        }
+
+        totals[category] += usage;
+    }
+
+    totals.A = Number(totals.A.toFixed(3));
+    totals.B = Number(totals.B.toFixed(3));
+    totals.C = Number(totals.C.toFixed(3));
+    totals.D = Number(totals.D.toFixed(3));
+    totals.Total = totals.A + totals.B + totals.C + totals.D;
+
+    const weekendList = [...weekendDateSet].sort();
+    const weekendCount = weekendList.length;
+
+    return {
+        dateStart: dateStart.toISOString(),
+        dateEnd: dateEnd.toISOString(),
+        holidayCount,
+        holidayListUsed,
+        weekendCount,
+        weekendList,
+        totals
+    };
+}
+
+
+module.exports = {  findMax, 
                       findMin, 
                       calculateAverage, 
                       returnTagName, 
@@ -250,5 +369,5 @@ function isHoliday(date) {
                       calCap,
                       countValuesHour,
                       isHoliday,
-                    };
+                };
                   

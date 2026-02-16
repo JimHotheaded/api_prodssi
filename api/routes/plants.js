@@ -39,7 +39,6 @@ router.get('/', async (req, res) => {
                         "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold"]},
       {"BM2_con":"BallMill2 Conveyor","tags":tagBM2_con.recordset},
       {"BM2":"BallMill2","tags":tagBM2.recordset},
-      // {"BM1":"BallMill1","tags":tagCT6_con.recordset},
       {"CT6_con":"Coating6 Conveyor","tags":tagCT6_con.recordset},
       {"CT6_heater":"Coating6 Heater","tags":tagCT6_heater.recordset},
       {"CT7_con":"Coating7 Conveyor","tags":tagCT7_con.recordset},
