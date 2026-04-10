@@ -30,7 +30,8 @@ router.get('/', async (req, res) => {
     const tagRMM2 = await pool.request().query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
     const tagWL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`;
     const tagRRM = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
-    const tagLC_CSH = await sql.query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_LC_CSH].[dbo].[TagTable]`;
+    const tagLC_CSH = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_LC_CSH].[dbo].[TagTable]`;
+    const tagHour_OFIL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`;
 
     res.json([
       {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
@@ -54,7 +55,8 @@ router.get('/', async (req, res) => {
       {"RMM2":"Raymond Mill2","tags":tagRMM2.recordset},
       {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset},
       {"RRM":"RingRollerMill","tags":tagRRM.recordset},
-      {"LC_CSH":"Loadcell Crushing","tags":tagLC_CSH.recordset}
+      {"LC_CSH":"Loadcell Crushing","tags":tagLC_CSH.recordset},
+      {"Hour_OFIL":"Hour OFIL","tags":tagHour_OFIL.recordset}
     ]);
   } catch (err) {
     console.error('Database query error:', err);
@@ -1015,6 +1017,122 @@ ORDER BY DateAndTime DESC`;
 
 /////////////////////////////////////////////////
 
+router.get('/Hour_OFIL', async (req, res) => {
+  try {
+    const result = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/Hour_OFIL/all', async (req, res) => {
+  try {
+    const result = await pool.request().query`
+  SELECT TOP (1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
+INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/Hour_OFIL/:tagIndex', async (req, res) => {
+  const {tagIndex} = req.params;
+  try {
+    const result = await pool.request().query`
+  SELECT TOP (1) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
+INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+//tbf=time before, taf=time after
+router.get('/Hour_OFIL/:tagIndex/:tbf/:taf', async (req, res) => {
+    const {tagIndex,tbf,taf} = req.params;
+    try {
+      const result = await pool.request().query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
+INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+      res.json(result.recordset);
+    } catch (err) {
+      console.error('Database query error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+
+router.get('/Hour_OFIL/:tagIndex/:tbf/:taf/avg', async (req, res) => {
+  const {tagIndex,tbf,taf} = req.params;
+  try {
+    const result = await pool.request().query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
+INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+  const data = result.recordset;
+  const tagName = returnTagName(data);
+  const maxVal = findMax(data, 'Val');
+  const minVal = findMin(data, 'Val');
+  const avgVal = calculateAverage(data, 'Val');
+  res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/countHour_OFIL', async (req, res) => {
+  const {tagIndex,tbf,taf,threshold} = req.query;
+  const thresholdValue = Number(threshold);
+  try {
+    const result = await pool.request().query`
+  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
+INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE DateAndTime between ${tbf} and ${taf}
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    const data = result.recordset;
+    const count = countValues(data, 'Val', '>', thresholdValue);
+    const hour = count/360;
+    const tagName = returnTagName(data);
+    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime', // your timestamp field name
+  isHoliday, // example: weekend as holiday
+  pointsPerHour: 360,
+  returnHours: true,
+  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+/////////////////////////////////////////////////
+
 router.get('/CSH', async (req, res) => {
   try {
     const result = await pool.request().query`SELECT TagName.TagName, TagName.TagIndex FROM [REPL_Crushing_Log].[dbo].[TagName]`;
@@ -1129,7 +1247,7 @@ ORDER BY DateAndTime DESC`;
   }
 });
 
-//////////////////////////////////////////////
+
 
 router.get('/FeedRaw', async (req, res) => {
   try {
