@@ -1033,7 +1033,7 @@ router.get('/Hour_OFIL/all', async (req, res) => {
   SELECT TOP (1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
 FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
 INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
-WHERE FloatTable.Status <> 'E'
+WHERE FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1050,7 +1050,7 @@ router.get('/Hour_OFIL/:tagIndex', async (req, res) => {
 FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
 INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
+and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
     res.json(result.recordset);
   } catch (err) {
@@ -1069,7 +1069,7 @@ FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
 INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
+and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
       res.json(result.recordset);
     } catch (err) {
@@ -1087,7 +1087,7 @@ FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
 INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
+and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -1111,7 +1111,7 @@ FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
 INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
+and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
