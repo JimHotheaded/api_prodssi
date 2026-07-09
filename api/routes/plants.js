@@ -34,9 +34,9 @@ router.get('/', async (req, res) => {
     const tagHour_OFIL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`;
 
     res.json([
-      {"message":["//how to use// {host}:3336/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
-                        "example : http://172.30.1.112:3336/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
-                        "example : http://172.30.1.112:3336/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
+      {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
+                        "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
+                        "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
