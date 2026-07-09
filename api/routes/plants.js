@@ -42,7 +42,7 @@ router.get('/', async (req, res) => {
                         "/{plant}/all   ==query top 1000 in database",
                         "/{plant}/{tag_id}/{time_before}/{time_after}/avg   ==average data",
                         "/{plant}/{tag_id}/{time_before}/{time_after}?fillGaps=true&cadence=10&cap=90&tolerance=0.2   ==optionally bridge short Kepware logging gaps (hold-last-value, only when gap<=cap seconds AND bracketing values agree within tolerance); unfillable gaps reported in flaggedGaps, synthetic rows marked Filled:true; WL and Hour_OFIL ignore this param (event data / cumulative counters must not be synthesized)",
-                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold; optional &pointsPerHour= overrides the samples-per-hour used for run-hour math (default 360 = 10s cadence; Hour_OFIL logs 60s => 60); gap fill is ON BY DEFAULT: short Kepware logging blips are bridged before counting so run-hours are not undercounted (response includes a fillGaps audit block; tune with &cadence=&cap=&tolerance=); pass &fillGaps=false for the legacy raw count identical to production :3334; countWL/countHour_OFIL/countLC_CSH never fill (event data / cumulative counter / on-change logging). WARNING: LC_CSH logs on-change (no fixed cadence) — sample-count run-hours are not meaningful for it regardless of parameters"]},
+                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold; optional &pointsPerHour= overrides the samples-per-hour used for run-hour math (default 360 = 10s cadence; Hour_OFIL logs 60s => 60; RMM1 logs 15s since 2026-07-09 so its default is 240 — pass &pointsPerHour=360&cadence=10 for RMM1 windows before that date); gap fill is ON BY DEFAULT: short Kepware logging blips are bridged before counting so run-hours are not undercounted (response includes a fillGaps audit block; tune with &cadence=&cap=&tolerance=); pass &fillGaps=false for the legacy raw count identical to production :3334; countWL/countHour_OFIL/countLC_CSH never fill (event data / cumulative counter / on-change logging). WARNING: LC_CSH logs on-change (no fixed cadence) — sample-count run-hours are not meaningful for it regardless of parameters"]},
       {"BM2_con":"BallMill2 Conveyor","tags":tagBM2_con.recordset},
       {"BM2":"BallMill2","tags":tagBM2.recordset},
       {"CT6_con":"Coating6 Conveyor","tags":tagCT6_con.recordset},
@@ -1683,7 +1683,9 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
 and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(applyFillGaps(result.recordset, req.query));
+      // RMM1 logs at 15s since 2026-07-09 ~09:18; opt-in ?fillGaps=true
+      // defaults to cadence 15 here (&cadence= still wins).
+      res.json(applyFillGaps(result.recordset, { cadence: '15', ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1719,10 +1721,11 @@ router.get('/countRMM1', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
+  // RMM1 logs at 15s since 2026-07-09 ~09:18 plant time (was 10s), so the
+  // default is 240 points/hour and gap-fill cadence 15. Windows BEFORE the
+  // changeover need &pointsPerHour=360&cadence=10 for correct values; windows
+  // spanning it are inaccurate with any single divisor.
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 240;
   try {
     const result = await pool.request().query`
   SELECT FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
@@ -1735,7 +1738,8 @@ ORDER BY DateAndTime DESC`;
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
+    // Default cadence 15 (RMM1's rate); an explicit &cadence= still wins.
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, { cadence: '15', ...req.query });
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
     const tagName = returnTagName(data);

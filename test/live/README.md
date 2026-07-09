@@ -24,5 +24,11 @@ machines; add `&fillGaps=false` legs when adapting them. The golden values in
 `test-count-default-flip.js` use fixed July 2026 windows and stay valid as
 long as the historian retains that data.
 
+RMM1's logging cadence changed 10s → 15s on 2026-07-09 (~09:18), and its
+count/window defaults changed with it (`pointsPerHour=240`, `cadence=15`).
+When diffing a post-change candidate against a pre-change server,
+`countRMM1` rows differ by design (hour scales ×1.5); everything else must
+stay byte-identical.
+
 The offline unit test (`node test/fillgaps-unit.js`, also `npm test`) needs
 no network or database.
