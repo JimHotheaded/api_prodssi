@@ -60,6 +60,9 @@ function findMax(data, field) {
   }
   
 
+// Thai public holidays. Needs annual updating (add year N+1 before Jan 1).
+// Weekend-falling dates are harmless no-ops (weekends already count as
+// holiday-rate days); substitution/in-lieu weekdays are what matter here.
 const holidays = [
   "2025-01-01", "2025-02-12", "2025-04-15", "2025-04-14",
   "2025-05-01", "2025-06-03", "2025-07-10", "2025-07-11",
@@ -69,7 +72,17 @@ const holidays = [
   "2026-04-14", "2026-04-15", "2026-05-01", "2026-05-04",
   "2026-06-03", "2026-07-28", "2026-07-29", "2026-07-30",
   "2026-08-12", "2026-10-13", "2026-10-23",
-  "2026-12-10", "2026-12-31"
+  "2026-12-07", // substitution for Father's Day (Sat 2026-12-05)
+  "2026-12-10", "2026-12-31",
+  // 2027 — from published national-holiday calendars (officeholidays.com);
+  // TODO 2026-12: verify against the Thai Cabinet announcement once issued
+  // (watch for extra one-off bridge days like 2026-07-29/30 were).
+  "2027-01-01", "2027-02-22", "2027-04-06", "2027-04-13",
+  "2027-04-14", "2027-04-15", "2027-05-04", "2027-05-20",
+  "2027-06-03", "2027-07-19", "2027-07-20", "2027-07-28",
+  "2027-08-12", "2027-10-13", "2027-10-25",
+  "2027-12-06", // substitution for Father's Day (Sun 2027-12-05)
+  "2027-12-10", "2027-12-31"
 ];
 
 /**
