@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
-const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, isHoliday } = require('../../utils');
+const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, isHolidayUTC, applyFillGaps, fillGapsForCount } = require('../../utils');
 const {dbConfig_PROD} = require('../../config');
 
 const pool = new sql.ConnectionPool(dbConfig_PROD);
@@ -34,14 +34,15 @@ router.get('/', async (req, res) => {
     const tagHour_OFIL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`;
 
     res.json([
-      {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
-                        "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
-                        "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
+      {"message":["//how to use// {host}:3336/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
+                        "example : http://172.30.1.112:3336/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
+                        "example : http://172.30.1.112:3336/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
                         "/{plant}/{tag_id}/{time_before}/{time_after}/avg   ==average data",
-                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold"]},
+                        "/{plant}/{tag_id}/{time_before}/{time_after}?fillGaps=true&cadence=10&cap=90&tolerance=0.2   ==optionally bridge short Kepware logging gaps (hold-last-value, only when gap<=cap seconds AND bracketing values agree within tolerance); unfillable gaps reported in flaggedGaps, synthetic rows marked Filled:true; WL and Hour_OFIL ignore this param (event data / cumulative counters must not be synthesized)",
+                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold; optional &pointsPerHour= overrides the samples-per-hour used for run-hour math (default 360 = 10s cadence; Hour_OFIL logs 60s => 60); gap fill is ON BY DEFAULT: short Kepware logging blips are bridged before counting so run-hours are not undercounted (response includes a fillGaps audit block; tune with &cadence=&cap=&tolerance=); pass &fillGaps=false for the legacy raw count identical to production :3334; countWL/countHour_OFIL/countLC_CSH never fill (event data / cumulative counter / on-change logging). WARNING: LC_CSH logs on-change (no fixed cadence) — sample-count run-hours are not meaningful for it regardless of parameters"]},
       {"BM2_con":"BallMill2 Conveyor","tags":tagBM2_con.recordset},
       {"BM2":"BallMill2","tags":tagBM2.recordset},
       {"CT6_con":"Coating6 Conveyor","tags":tagCT6_con.recordset},
@@ -120,7 +121,7 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf', async (req, res) => {
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
   and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -136,7 +137,7 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
   WHERE DateAndTime between ${tbf} and ${taf}
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
-  and FloatBallMill_Conveyor.TagIndex <> 'E'
+  and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
   const data = result.recordset;
   const tagName = returnTagName(data);
@@ -153,6 +154,13 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
 router.get('/countBM2_con', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
       SELECT FloatBallMill_Conveyor.DateAndTime,FloatBallMill_Conveyor.Val,FloatBallMill_Conveyor.TagIndex ,TagBallMill_Conveyor.TagName
@@ -162,18 +170,23 @@ router.get('/countBM2_con', async (req, res) => {
   and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
   and FloatBallMill_Conveyor.Status <> 'E'
   ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -236,7 +249,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatBallMill.TagIndex = ${tagIndex}
 and FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -269,6 +282,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countBM2', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatBallMill.DateAndTime,FloatBallMill.Val,FloatBallMill.TagIndex ,TagBallMill.TagName
@@ -278,18 +298,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatBallMill.TagIndex = ${tagIndex}
 and FloatBallMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -352,7 +377,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
 and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -385,6 +410,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countCT6_con', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatCoating_MC6_Con.DateAndTime,FloatCoating_MC6_Con.Val,FloatCoating_MC6_Con.TagIndex ,TagCoating_MC6_Con.TagName
@@ -394,18 +426,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
 and FloatCoating_MC6_Con.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -468,7 +505,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
 and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -501,6 +538,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countCT6_heater', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatCoating_MC6_Heater.DateAndTime,FloatCoating_MC6_Heater.Val,FloatCoating_MC6_Heater.TagIndex ,TagCoating_MC6_Heater.TagName
@@ -510,18 +554,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
 and FloatCoating_MC6_Heater.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -584,7 +633,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
 and FloatCoating_MC7_Conveyor.Status <>'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -640,6 +689,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countCT7_con', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
@@ -649,18 +705,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
 and FloatCoating_MC7_Conveyor.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -723,7 +784,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7.TagIndex = ${tagIndex}
 and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -756,6 +817,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countCT7_heater', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatCoating_MC7.DateAndTime,FloatCoating_MC7.Val,FloatCoating_MC7.TagIndex ,TagCoating_MC7.TagName
@@ -765,18 +833,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatCoating_MC7.TagIndex = ${tagIndex}
 and FloatCoating_MC7.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -839,7 +912,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -872,6 +945,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countRRM', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
@@ -881,18 +961,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -955,7 +1040,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -988,6 +1073,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countLC_CSH', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
@@ -997,18 +1089,24 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
+    // No gap fill here: LC_CSH logs on-change with no fixed cadence (measured
+    // intervals 1-56s), so a cadence-based fill would fabricate rows and the
+    // sample-count run-hours are not meaningful anyway. fillGaps param ignored.
     const data = result.recordset;
+    const fillGapsMeta = null;
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1071,6 +1169,8 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
+      // No fillGaps here: Hour_OFIL tags are cumulative counters — holding a
+      // counter flat across a gap understates it, so gaps must stay visible.
       res.json(result.recordset);
     } catch (err) {
       console.error('Database query error:', err);
@@ -1104,6 +1204,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countHour_OFIL', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
@@ -1113,18 +1220,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
 ORDER BY DateAndTime DESC`;
+    // No gap fill: Hour_OFIL tags are cumulative counters — synthesizing
+    // samples would fabricate counter progress. fillGaps param is ignored.
     const data = result.recordset;
+    const fillGapsMeta = null;
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1187,7 +1299,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatValue.TagIndex = ${tagIndex}
 and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1220,6 +1332,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countCSH', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatValue.DateAndTime,FloatValue.Val,FloatValue.TagIndex ,TagName.TagName
@@ -1229,18 +1348,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatValue.TagIndex = ${tagIndex}
 and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1303,7 +1427,7 @@ router.get('/FeedRaw/:tagIndex/:tbf/:taf', async (req, res) => {
   and FloatFeedRaw.TagIndex = ${tagIndex}
   and FloatFeedRaw.Status <> 'E'
   ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1336,6 +1460,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countFeedRaw', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatFeedRaw.DateAndTime,FloatFeedRaw.Val,FloatFeedRaw.TagIndex ,TagFeedRaw.TagName
@@ -1345,18 +1476,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatFeedRaw.TagIndex = ${tagIndex}
 and FloatFeedRaw.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1419,7 +1555,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
 and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1452,6 +1588,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countHYD', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
@@ -1461,18 +1604,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatHydraulic.TagIndex = ${tagIndex}
 and FloatHydraulic.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1535,7 +1683,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
 and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1568,6 +1716,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countRMM1', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
@@ -1577,18 +1732,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRayMondMill.TagIndex = ${tagIndex}
 and FloatRayMondMill.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1651,7 +1811,7 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRaymondMill2.TagIndex = ${tagIndex}
 and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-      res.json(result.recordset);
+      res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1684,6 +1844,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countRMM2', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatRaymondMill2.DateAndTime,FloatRaymondMill2.Val,FloatRaymondMill2.TagIndex ,TagRaymondMill2.TagName
@@ -1693,18 +1860,23 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatRaymondMill2.TagIndex = ${tagIndex}
 and FloatRaymondMill2.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    const data = result.recordset;
+    // Gap fill is on by default: short Kepware logging blips are bridged before
+    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
+    // legacy raw count (meta null, output identical to production).
+    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime', // your timestamp field name
-  isHoliday, // example: weekend as holiday
-  pointsPerHour: 360,
+  timeField: 'DateAndTime',
+  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
   returnHours: true,
-  tzOffsetMinutes: -420, // +7 hours (Asia/Bangkok)
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1827,6 +1999,13 @@ ORDER BY DateAndTime DESC`;
 router.get('/countWL', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
+  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
+  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
+  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     const result = await pool.request().query`
   SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
@@ -1836,9 +2015,11 @@ WHERE DateAndTime between ${tbf} and ${taf}
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
+    // No gap fill: WL is event data — synthesizing rows would fabricate
+    // weighing cycles. fillGaps param is ignored.
     const data = result.recordset;
     const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/360;
+    const hour = count/pointsPerHour;
     const tagName = returnTagName(data);
     res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour});
   } catch (err) {
