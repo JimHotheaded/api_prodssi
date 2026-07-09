@@ -14,14 +14,13 @@ A read-only Express REST API that exposes SCADA historian data from a SQL Server
 node server.js
 ```
 
-There are no tests, no lint, and no build step (`npm test` is the placeholder error). Verifying a change means starting the server and hitting endpoints — but note the SQL Server is only reachable on the plant network, so queries fail off-site.
+`npm test` runs the offline unit suite (`test/fillgaps-unit.js` — no network/DB needed). `test/live/` holds differential tests that byte-compare this copy (:3336) against production (:3334) on fixed historical windows; they need the plant network and both servers up (see `test/live/README.md`). No lint, no build step. Fresh clone: `npm install`, then copy `config.example.js` to `config.js` and fill in credentials (or set `DB_USER`/`DB_PASSWORD`/`DB_SERVER` env vars).
 
 ## Architecture
 
-- `server.js` → `app.js` → mounts `api/routes/plants.js` at `/plants`. The `/meters` route exists (`api/routes/meters.js`) but is **commented out in app.js** — it also imports `config.js` incorrectly (expects a default export), so re-enabling it requires fixing that import.
-- `config.js` exports `{dbConfig_PROD}` — a single shared `mssql` pool config (pool created once at the top of `plants.js`).
-- `utils.js` — shared aggregation helpers (`findMax`, `findMin`, `calculateAverage`, `countValues`, `countValuesHour`, `calCap`, `isHoliday`, `groupUsageByTariff`) plus a hardcoded Thai holiday list (2025–2026) that needs annual updating.
-- `*_backup.js` files (`config_backup.js`, `api/routes/plants_backup.js`) are stale copies, not imported by anything.
+- `server.js` → `app.js` → mounts `api/routes/plants.js` at `/plants` (the only route file).
+- `config.js` (gitignored; template in `config.example.js`) exports `{dbConfig_PROD}` — a single shared `mssql` pool config (pool created once at the top of `plants.js`). Credentials come from `DB_USER`/`DB_PASSWORD`/`DB_SERVER` env vars with hardcoded fallbacks.
+- `utils.js` — shared aggregation helpers (`findMax`, `findMin`, `calculateAverage`, `countValues`, `countValuesHour`, `calCap`, `isHoliday`/`isHolidayUTC`, `fillGaps` and friends) plus a hardcoded Thai holiday list (2025–2027) that needs annual updating (2027 carries a TODO to re-verify against the Cabinet announcement).
 
 ### plants.js route pattern (the big picture)
 
@@ -49,6 +48,6 @@ Implemented 2026-07-07: `fillGaps`/`applyFillGaps` live in `utils.js`, wired int
 - Queries use `mssql` tagged-template literals (`` pool.request().query`...${param}...` ``), which parameterize inputs — keep that form; don't switch to string concatenation.
 - All rows are fetched into Node and aggregated in JS (not SQL `AVG`/`COUNT`), so wide time windows are memory/latency heavy — that's why `requestTimeout` is 60s.
 - Run-hour math in `count{plant}` routes defaults to 360 points/hour (10s cadence); callers override with `&pointsPerHour=` for other fixed cadences (Hour_OFIL 60s ⇒ 60). The default is intentionally kept at 360 — even where it's physically wrong — so existing downstream consumers see unchanged values. LC_CSH has no fixed cadence (on-change logging), so its count-based `hour` values are meaningless with any parameter.
-- Timestamps: the DB stores naive Bangkok-local datetimes; the mssql driver (default `useUTC`) parses them as UTC, so JSON responses show local wall-clock time with a fake `Z` suffix. **This is intentional wire format — downstream apps depend on it; do not "fix" it by setting `useUTC:false`.** Internally, tariff bucketing reads the Date's UTC fields (`clock:'utc'` + `isHolidayUTC` in `utils.js`), which yields plant-local time on any server OS timezone. `groupUsageByTariff` still uses its own `shiftMinus7` approach and only works on a +07:00 machine.
+- Timestamps: the DB stores naive Bangkok-local datetimes; the mssql driver (default `useUTC`) parses them as UTC, so JSON responses show local wall-clock time with a fake `Z` suffix. **This is intentional wire format — downstream apps depend on it; do not "fix" it by setting `useUTC:false`.** Internally, tariff bucketing reads the Date's UTC fields (`clock:'utc'` + `isHolidayUTC` in `utils.js`), which yields plant-local time on any server OS timezone.
 - `count{plant}` routes return 400 if `threshold` is missing or non-numeric (previously they silently returned count 0).
 - `count{plant}` responses are gap-filled by default, so their `count`/`hour`/`distHour` values intentionally differ from production :3334 wherever logging gaps exist; `&fillGaps=false` reproduces production exactly. The window routes are unaffected — there `fillGaps` remains opt-in.
