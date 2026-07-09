@@ -1,7 +1,2 @@
 /node_modules
-/package-lock.json
-/package.json
 /config.js
-/config_backup.js
-/api/routes/plants_backup.js
-/api/routes/meters.js
