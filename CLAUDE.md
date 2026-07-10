@@ -14,11 +14,11 @@ A read-only Express REST API that exposes SCADA historian data from a SQL Server
 node server.js
 ```
 
-`npm test` runs the offline unit suite (`test/fillgaps-unit.js` — no network/DB needed). `test/live/` holds differential tests that byte-compare a candidate copy on :3336 against the running production server on :3334 on fixed historical windows; they need the plant network and both servers up (see `test/live/README.md`). They were written for the 2026-07-09 go-live (old production on :3334); to reuse them for a future change, run the new candidate on :3336 and re-check the whitelisted expected diffs. No lint, no build step. Fresh clone: `npm install`, then copy `config.example.js` to `config.js` and fill in credentials (or set `DB_USER`/`DB_PASSWORD`/`DB_SERVER` env vars).
+`npm test` runs the offline unit suite (`test/fillgaps-unit.js` + `test/alarm-params-unit.js` — no network/DB needed). `test/live/` holds differential tests that byte-compare a candidate copy on :3336 against the running production server on :3334 on fixed historical windows; they need the plant network and both servers up (see `test/live/README.md`). They were written for the 2026-07-09 go-live (old production on :3334); to reuse them for a future change, run the new candidate on :3336 and re-check the whitelisted expected diffs. No lint, no build step. Fresh clone: `npm install`, then copy `config.example.js` to `config.js` and fill in credentials (or set `DB_USER`/`DB_PASSWORD`/`DB_SERVER` env vars).
 
 ## Architecture
 
-- `server.js` → `app.js` → mounts `api/routes/plants.js` at `/plants` (the only route file).
+- `server.js` → `app.js` → mounts `api/routes/plants.js` at `/plants` and the self-contained alarm module `api/alarms/` at `/api/alm`.
 - `config.js` (gitignored; template in `config.example.js`) exports `{dbConfig_PROD}` — a single shared `mssql` pool config (pool created once at the top of `plants.js`). Credentials come from `DB_USER`/`DB_PASSWORD`/`DB_SERVER` env vars with hardcoded fallbacks.
 - `utils.js` — shared aggregation helpers (`findMax`, `findMin`, `calculateAverage`, `countValues`, `countValuesHour`, `calCap`, `isHoliday`/`isHolidayUTC`, `fillGaps` and friends) plus a hardcoded Thai holiday list (2025–2027) that needs annual updating (2027 carries a TODO to re-verify against the Cabinet announcement).
 
@@ -36,6 +36,17 @@ node server.js
 `WL` (wheel loader weights) deviates from the pattern: pivot queries, `/sum`, `/datacal`. `GET /plants/` is self-documenting — it returns usage examples plus every plant's tag list.
 
 When adding a new plant, copy an existing block, swap the database/table/column names (each DB uses differently-named tag tables — check the `/` route at the top of plants.js for the exact names), and add it to the root `/` listing. When fixing a bug in one plant's route, check whether the same copy-paste bug exists in all the other blocks (this has happened before, e.g. `TagIndex <> 'E'` instead of `Status <> 'E'` in the BM2_con avg route).
+
+### Alarm-event module (`api/alarms/`, mounted at `/api/alm`, added 2026-07-10)
+
+Self-contained module (per `alarm_event_api_spec.md`, repo root) exposing the FactoryTalk Alarms & Events historian `[Alarm_Event].[dbo].[AllEvent]`. Full endpoint manual with example responses: `api/alarms/README.md`. **The spec's DB address (172.30.1.225) is wrong — Alarm_Event lives on the same SQL Server as the historian (192.168.100.100)**; the module derives its pool config from `dbConfig_PROD` with `database:'Alarm_Event'` and a smaller pool (max 5). `ALARM_DB_USER`/`ALARM_DB_PASS` env vars override the credentials for a future db_datareader-only login.
+
+- `index.js` — Router: self-doc `GET /` plus `/recent`, `/daily`, `/noisy`, `/dbhealth`, `/faults`, `/source/:sourceName`. Strictly read-only SELECTs, tagged-template parameterized.
+- `pool.js` — named ConnectionPool with lazy connect/auto-retry: the API starts and serves `/plants` even with `Alarm_Event` unreachable; alarm routes return 503 `{"error":"Alarm_Event database unavailable"}` until it reconnects (no restart needed). `alarmRoute()` wraps every handler.
+- `params.js` — pure `intParam`/`boolParam` validators (no mssql import; unit-tested offline by `test/alarm-params-unit.js`). Rule: missing/empty → default, non-integer or out-of-range → 400, **never clamp**.
+- Error format is JSON `{error}` for 400/500/503 — a deliberate difference from plants.js's plain-text 500 (spec constraint).
+- **FactoryTalk stores `EventTimeStamp` in true UTC** (verified 2026-07-10: `MAX(EventTimeStamp)` tracks `GETUTCDATE()` within seconds) — the opposite of the `REPL_*` DBs. Every alarm query therefore filters against `GETUTCDATE()` (never `GETDATE()`, which silently hides the newest 7 h of events) and shifts output `+7 h` (`PLANT_TZ_OFFSET_HOURS` in `index.js`) so the wire format matches the rest of the API (plant wall-clock, fake `Z`). `/daily` buckets are plant-local calendar days. Do not "fix" either direction.
+- `dbo.AllEvent` may lack an index on `EventTimeStamp`; if time-range queries slow down as rows grow, flag for manual SSMS index work — never create indexes from the API.
 
 ### Data-quality context
 

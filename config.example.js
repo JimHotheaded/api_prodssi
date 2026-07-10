@@ -1,6 +1,9 @@
 // Copy this file to config.js and fill in the real credentials (config.js is
 // gitignored). Values can also be supplied via environment variables:
 // DB_USER, DB_PASSWORD, DB_SERVER.
+// The alarm module (api/alarms/) reuses these credentials against the same
+// server (database Alarm_Event); set ALARM_DB_USER/ALARM_DB_PASS env vars to
+// point it at a separate db_datareader-only login instead.
 const dbConfig_PROD = {
     user: process.env.DB_USER || 'YOUR_DB_USER',
     password: process.env.DB_PASSWORD || 'YOUR_DB_PASSWORD',
