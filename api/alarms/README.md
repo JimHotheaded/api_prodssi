@@ -34,6 +34,16 @@ calendar days. Do not convert.
 non-integer, or outside the allowed range → **400** (values are never silently
 clamped). Booleans accept `true`/`false`/`1`/`0` (case-insensitive).
 
+**Performance (2026-07-19).** `dbo.AllEvent` has no index on `EventTimeStamp`,
+so every time filter internally seeks the table's clustered `TicksTimeStamp`
+index instead (`TicksTimeStamp` = the same UTC instant as Windows FILETIME
+ticks; `EventTimeStamp` is that value truncated to ms, making the translation
+exact — see `ticks.js`). Result: `/recent`, `/source`, and `/dbhealth` answer
+in milliseconds regardless of table size; aggregation endpoints (`/daily`,
+`/noisy`, `/faults`, `/groups?hours=`) scale with the *window* size, not the
+table size. Responses are unchanged except that events inside the same
+millisecond may order differently than before.
+
 **Event-row fields** (returned by `/recent`, `/active`, and `/source/...`):
 
 | Field | Type | Meaning |

@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node test/fillgaps-unit.js && node test/alarm-params-unit.js"
+    "test": "node test/fillgaps-unit.js && node test/alarm-params-unit.js && node test/alarm-ticks-unit.js"
   },
   "author": "",
   "license": "ISC",

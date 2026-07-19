@@ -17,6 +17,10 @@ const express = require('express');
 const router = express.Router();
 const { intParam, boolParam, dateParam } = require('./params');
 const { alarmRoute } = require('./pool');
+// Performance: every time filter below seeks the clustered TicksTimeStamp
+// index instead of comparing EventTimeStamp (unindexed -> full table scan that
+// slows down as the table grows). See ticks.js for the proof of equivalence.
+const { toFileTicks, ticksRange, hoursAgo } = require('./ticks');
 
 const bad = (res, error) => res.status(400).json({ error });
 
@@ -87,9 +91,12 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
     if (typeof req.query.group !== 'string') return bad(res, 'group must be a string');
     group = req.query.group;
   }
-  // The window bounds are JS Dates (or null), so plain >=/<= comparisons with
-  // an IS-NULL guard are safe here — unlike the earlier DATEADD(-@hours) form,
-  // where a null param (typed nvarchar) failed SQL compile-time type checks.
+  // Time window as a ticks range (sentinel-bounded, see ticks.js) so the query
+  // seeks the clustered index and TOP stops early — instead of scanning +
+  // sorting the whole table on unindexed EventTimeStamp. ORDER BY
+  // TicksTimeStamp DESC is the same newest-first order (EventTimeStamp is
+  // TicksTimeStamp truncated to ms; only sub-millisecond ties can reorder).
+  const { fromTicks, toTicks } = ticksRange(win.fromUtc, win.toUtc);
   const result = await pool.request().query`
     SELECT TOP (${limit.value})
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS EventTimeStamp,
@@ -100,9 +107,9 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
       AND (${source} IS NULL OR SourceName = ${source})
       AND (${condition} IS NULL OR ConditionName = ${condition})
       AND (${group} IS NULL OR GroupPath = ${group})
-      AND (${win.fromUtc} IS NULL OR EventTimeStamp >= ${win.fromUtc})
-      AND (${win.toUtc} IS NULL OR EventTimeStamp <= ${win.toUtc})
-    ORDER BY EventTimeStamp DESC`;
+      AND TicksTimeStamp >= ${fromTicks}
+      AND TicksTimeStamp <= ${toTicks}
+    ORDER BY TicksTimeStamp DESC`;
   res.json({ count: result.recordset.length, rows: result.recordset });
 }));
 
@@ -136,12 +143,12 @@ router.get('/active', alarmRoute(async (req, res, pool) => {
                SourceName, ConditionName, SubConditionName,
                Severity, Priority, Message, InputValue, LimitValue, Active, Acked, GroupPath,
                ROW_NUMBER() OVER (PARTITION BY SourceName, ConditionName
-                                  ORDER BY EventTimeStamp DESC) AS rn
+                                  ORDER BY TicksTimeStamp DESC) AS rn
         FROM dbo.AllEvent
         WHERE (Message NOT LIKE 'Alarm fault%' OR Message IS NULL)
           AND (${condition} IS NULL OR ConditionName = ${condition})
           AND (${group} IS NULL OR GroupPath = ${group})
-          AND EventTimeStamp >= DATEADD(HOUR, -${hours.value}, GETUTCDATE())
+          AND TicksTimeStamp >= ${toFileTicks(hoursAgo(hours.value))}
     ) latest
     WHERE rn = 1 AND Active = 1
       AND (${acked.value} IS NULL OR Acked = ${acked.value})
@@ -157,8 +164,13 @@ router.get('/daily', alarmRoute(async (req, res, pool) => {
   // The shift is computed once in a derived table and grouped by its alias —
   // repeating the DATEADD in SELECT and GROUP BY fails (error 8120) because
   // each ${...} interpolation becomes a distinct SQL parameter, making the two
-  // expressions look different to SQL Server. The WHERE stays on the raw
-  // column (sargable): plant-local midnight N days ago, expressed back in UTC.
+  // expressions look different to SQL Server. The window bound (plant-local
+  // midnight N days ago, expressed back in UTC) is computed in JS and applied
+  // as a ticks seek on the clustered index.
+  const plantNow = new Date(Date.now() + PLANT_TZ_OFFSET_HOURS * 3600000);
+  const windowStartUtc = new Date(Date.UTC(
+    plantNow.getUTCFullYear(), plantNow.getUTCMonth(), plantNow.getUTCDate() - days.value,
+  ) - PLANT_TZ_OFFSET_HOURS * 3600000);
   const result = await pool.request().query`
     SELECT
         event_date,
@@ -169,8 +181,7 @@ router.get('/daily', alarmRoute(async (req, res, pool) => {
         SELECT CAST(DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS date) AS event_date,
                Message
         FROM dbo.AllEvent
-        WHERE EventTimeStamp >= DATEADD(HOUR, -${PLANT_TZ_OFFSET_HOURS},
-                CAST(CAST(DATEADD(DAY, -${days.value}, DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, GETUTCDATE())) AS date) AS datetime2))
+        WHERE TicksTimeStamp >= ${toFileTicks(windowStartUtc)}
     ) shifted
     GROUP BY event_date
     ORDER BY event_date`;
@@ -196,7 +207,7 @@ router.get('/noisy', alarmRoute(async (req, res, pool) => {
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, MIN(EventTimeStamp)) AS first_event,
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, MAX(EventTimeStamp)) AS last_event
     FROM dbo.AllEvent
-    WHERE EventTimeStamp >= DATEADD(HOUR, -${hours.value}, GETUTCDATE())
+    WHERE TicksTimeStamp >= ${toFileTicks(hoursAgo(hours.value))}
       AND (${group} IS NULL OR GroupPath = ${group})
     GROUP BY SourceName, ConditionName
     ORDER BY event_count DESC`;
@@ -223,7 +234,7 @@ router.get('/groups', alarmRoute(async (req, res, pool) => {
                COUNT(*) AS event_count,
                DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, MAX(EventTimeStamp)) AS last_event
         FROM dbo.AllEvent
-        WHERE EventTimeStamp >= DATEADD(HOUR, -${hours.value}, GETUTCDATE())
+        WHERE TicksTimeStamp >= ${toFileTicks(hoursAgo(hours.value))}
         GROUP BY GroupPath
         ORDER BY event_count DESC`;
   res.json({ count: result.recordset.length, rows: result.recordset });
@@ -239,12 +250,19 @@ router.get('/dbhealth', alarmRoute(async (req, res, pool) => {
              AS decimal(18,2))                                                  AS headroom_mb
     FROM sys.database_files
     WHERE type_desc = 'ROWS'`;
+  // Heartbeat via TOP 1 on the clustered TicksTimeStamp index (instant) —
+  // MAX(EventTimeStamp) would scan the whole table. total_rows comes from the
+  // catalog (sys.partitions.rows is nominally approximate but exact enough for
+  // monitoring; CAST to int keeps the JSON a number — safe, the 10GB cap bounds
+  // the table far below int range).
   const heartbeat = await pool.request().query`
     SELECT
-        DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, MAX(EventTimeStamp)) AS newest_event,
-        DATEDIFF(MINUTE, MAX(EventTimeStamp), GETUTCDATE()) AS minutes_since_last,
-        COUNT(*) AS total_rows
-    FROM dbo.AllEvent`;
+        DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, n.newest) AS newest_event,
+        DATEDIFF(MINUTE, n.newest, GETUTCDATE()) AS minutes_since_last,
+        (SELECT CAST(SUM(p.rows) AS int) FROM sys.partitions p
+         WHERE p.object_id = OBJECT_ID('dbo.AllEvent') AND p.index_id IN (0, 1)) AS total_rows
+    FROM (SELECT (SELECT TOP (1) EventTimeStamp FROM dbo.AllEvent
+                  ORDER BY TicksTimeStamp DESC) AS newest) n`;
   const f = files.recordset[0];
   const h = heartbeat.recordset[0];
   res.json({
@@ -274,7 +292,7 @@ router.get('/faults', alarmRoute(async (req, res, pool) => {
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, MAX(EventTimeStamp)) AS last_fault
     FROM dbo.AllEvent
     WHERE Message LIKE '%quality is bad%'
-      AND EventTimeStamp >= DATEADD(HOUR, -${hours.value}, GETUTCDATE())
+      AND TicksTimeStamp >= ${toFileTicks(hoursAgo(hours.value))}
     GROUP BY SourceName
     ORDER BY fault_count DESC`;
   res.json({ count: result.recordset.length, rows: result.recordset });
@@ -295,6 +313,10 @@ router.get('/source/:sourceName', alarmRoute(async (req, res, pool) => {
     if (typeof req.query.condition !== 'string') return bad(res, 'condition must be a string');
     condition = req.query.condition;
   }
+  // The SourceName seek uses AE_SOURCENAME_IDX; its rows carry the clustered
+  // key, so the ticks bounds narrow that seek and ORDER BY TicksTimeStamp
+  // avoids a sort (same newest-first order, see /recent).
+  const { fromTicks, toTicks } = ticksRange(win.fromUtc, win.toUtc);
   const result = await pool.request().query`
     SELECT TOP (${limit.value})
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS EventTimeStamp,
@@ -303,9 +325,9 @@ router.get('/source/:sourceName', alarmRoute(async (req, res, pool) => {
     FROM dbo.AllEvent
     WHERE SourceName = ${sourceName}
       AND (${condition} IS NULL OR ConditionName = ${condition})
-      AND (${win.fromUtc} IS NULL OR EventTimeStamp >= ${win.fromUtc})
-      AND (${win.toUtc} IS NULL OR EventTimeStamp <= ${win.toUtc})
-    ORDER BY EventTimeStamp DESC`;
+      AND TicksTimeStamp >= ${fromTicks}
+      AND TicksTimeStamp <= ${toTicks}
+    ORDER BY TicksTimeStamp DESC`;
   res.json({ count: result.recordset.length, rows: result.recordset });
 }));
 
