@@ -15,7 +15,7 @@
 const PLANT_TZ_OFFSET_HOURS = 7;
 const express = require('express');
 const router = express.Router();
-const { intParam, boolParam, dateParam } = require('./params');
+const { intParam, boolParam, dateParam, conditionPattern } = require('./params');
 const { alarmRoute } = require('./pool');
 // Performance: every time filter below seeks the clustered TicksTimeStamp
 // index instead of comparing EventTimeStamp (unindexed -> full table scan that
@@ -31,13 +31,13 @@ router.get('/', (req, res) => {
                 'example : http://172.30.1.112:3334/api/alm/recent?limit=10',
                 'example : http://172.30.1.112:3334/api/alm/source/RRM_Motor_Temp?limit=20&hours=168'] },
     { function_list: [
-      '/recent?limit=50&excludeFaults=true&source=&condition=&group=&hours=&from=&to=   ==latest events, newest first (limit 1-5000; excludeFaults drops "Alarm fault%" noise; optional exact SourceName filter; optional exact ConditionName filter e.g. condition=TRIP; optional exact GroupPath filter, values from /groups; time window: hours 1-720 OR absolute from/to in plant local time e.g. from=2026-07-10%2008:00:00&to=2026-07-10%2012:00:00)',
+      '/recent?limit=50&excludeFaults=true&source=&condition=&group=&hours=&from=&to=   ==latest events, newest first (limit 1-5000; excludeFaults drops "Alarm fault%" noise; optional exact SourceName filter; optional ConditionName family filter — condition=TRIP also matches TRIP_L and other TRIP_* variants, condition=TRIP_L stays exact; optional exact GroupPath filter, values from /groups; time window: hours 1-720 OR absolute from/to in plant local time e.g. from=2026-07-10%2008:00:00&to=2026-07-10%2012:00:00)',
       '/active?condition=&group=&acked=&hours=168   ==alarms standing RIGHT NOW (latest event per source+condition has Active=1) e.g. /active?condition=TRIP; acked=false shows only unacknowledged; hours bounds the look-back (1-720)',
       '/groups?hours=   ==list every plant/area (distinct GroupPath) with event counts; pass one of these values as the group= filter on /recent and /noisy',
       '/daily?days=14   ==events per day split real vs quality-fault (days 1-90)',
       '/noisy?hours=24&top=10&group=   ==top chattering sources by event count (hours 1-720, top 1-50; optional exact GroupPath filter)',
       '/faults?hours=24&top=20   ==quality-fault ("quality is bad") counts per source (hours 1-720, top 1-50)',
-      '/source/{sourceName}?limit=100&hours=168&condition=&from=&to=   ==event history for one source (limit 1-5000; hours 1-720 OR absolute from/to in plant local time; optional exact ConditionName filter)',
+      '/source/{sourceName}?limit=100&hours=168&condition=&from=&to=   ==event history for one source (limit 1-5000; hours 1-720 OR absolute from/to in plant local time; optional ConditionName family filter, e.g. condition=TRIP includes TRIP_L)',
       '/dbhealth   ==data-file usage vs the 10GB SQL Express limit + logging heartbeat',
     ] },
   ]);
@@ -97,6 +97,9 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
   // TicksTimeStamp DESC is the same newest-first order (EventTimeStamp is
   // TicksTimeStamp truncated to ms; only sub-millisecond ties can reorder).
   const { fromTicks, toTicks } = ticksRange(win.fromUtc, win.toUtc);
+  // condition matches the whole family: exact name OR underscore-suffixed
+  // variants (condition=TRIP includes TRIP_L) — see conditionPattern.
+  const condLike = condition === null ? null : conditionPattern(condition);
   const result = await pool.request().query`
     SELECT TOP (${limit.value})
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS EventTimeStamp,
@@ -105,7 +108,7 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
     FROM dbo.AllEvent
     WHERE (${excl.value} = 0 OR Message NOT LIKE 'Alarm fault%' OR Message IS NULL)
       AND (${source} IS NULL OR SourceName = ${source})
-      AND (${condition} IS NULL OR ConditionName = ${condition})
+      AND (${condition} IS NULL OR ConditionName = ${condition} OR ConditionName LIKE ${condLike})
       AND (${group} IS NULL OR GroupPath = ${group})
       AND TicksTimeStamp >= ${fromTicks}
       AND TicksTimeStamp <= ${toTicks}
@@ -118,8 +121,8 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
 // has Active=1. ROW_NUMBER picks that latest event inside a bounded look-back
 // window (?hours=, default 168) — an alarm standing longer than the window
 // would be missed, so raise hours (max 720) if the plant leaves alarms up for
-// weeks. Optional ?condition= (e.g. TRIP), ?group=, ?acked= (false = only
-// unacknowledged) narrow the result.
+// weeks. Optional ?condition= (family match: TRIP includes TRIP_L), ?group=,
+// ?acked= (false = only unacknowledged) narrow the result.
 router.get('/active', alarmRoute(async (req, res, pool) => {
   const hours = intParam(req.query.hours, 'hours', 168, 1, 720);
   if (hours.error) return bad(res, hours.error);
@@ -135,6 +138,7 @@ router.get('/active', alarmRoute(async (req, res, pool) => {
     if (typeof req.query.group !== 'string') return bad(res, 'group must be a string');
     group = req.query.group;
   }
+  const condLike = condition === null ? null : conditionPattern(condition);
   const result = await pool.request().query`
     SELECT EventTimeStamp, SourceName, ConditionName, SubConditionName,
            Severity, Priority, Message, InputValue, LimitValue, Active, Acked, GroupPath
@@ -146,7 +150,7 @@ router.get('/active', alarmRoute(async (req, res, pool) => {
                                   ORDER BY TicksTimeStamp DESC) AS rn
         FROM dbo.AllEvent
         WHERE (Message NOT LIKE 'Alarm fault%' OR Message IS NULL)
-          AND (${condition} IS NULL OR ConditionName = ${condition})
+          AND (${condition} IS NULL OR ConditionName = ${condition} OR ConditionName LIKE ${condLike})
           AND (${group} IS NULL OR GroupPath = ${group})
           AND TicksTimeStamp >= ${toFileTicks(hoursAgo(hours.value))}
     ) latest
@@ -317,6 +321,7 @@ router.get('/source/:sourceName', alarmRoute(async (req, res, pool) => {
   // key, so the ticks bounds narrow that seek and ORDER BY TicksTimeStamp
   // avoids a sort (same newest-first order, see /recent).
   const { fromTicks, toTicks } = ticksRange(win.fromUtc, win.toUtc);
+  const condLike = condition === null ? null : conditionPattern(condition);
   const result = await pool.request().query`
     SELECT TOP (${limit.value})
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS EventTimeStamp,
@@ -324,7 +329,7 @@ router.get('/source/:sourceName', alarmRoute(async (req, res, pool) => {
         Message, InputValue, LimitValue, Active, Acked
     FROM dbo.AllEvent
     WHERE SourceName = ${sourceName}
-      AND (${condition} IS NULL OR ConditionName = ${condition})
+      AND (${condition} IS NULL OR ConditionName = ${condition} OR ConditionName LIKE ${condLike})
       AND TicksTimeStamp >= ${fromTicks}
       AND TicksTimeStamp <= ${toTicks}
     ORDER BY TicksTimeStamp DESC`;

@@ -50,7 +50,7 @@ millisecond may order differently than before.
 |---|---|---|
 | `EventTimeStamp` | string | When the event occurred (plant local time, see above) |
 | `SourceName` | string | Alarm tag/source, e.g. `RRM_Motor_Temp` |
-| `ConditionName` | string | Alarm condition. Values in this plant's data: `EVENT`, `TRIP`, `HI`, `LO` (plus one historical `TRIP_L`) |
+| `ConditionName` | string | Alarm condition. Values in this plant's data: `EVENT`, `TRIP`, `HI`, `LO`, `TRIP_L`. The `condition=` filter matches families: `condition=TRIP` includes `TRIP_L` (and any future `TRIP_*`); `condition=TRIP_L` stays exact |
 | `SubConditionName` | string | Sub-condition of the alarm state |
 | `Severity` | int | FactoryTalk severity, higher = worse (e.g. 900 = trip, 100 = info) |
 | `Priority` | int | FactoryTalk priority class |
@@ -82,7 +82,7 @@ The default view for an "active alarms" style dashboard panel.
 | `from` / `to` | datetime | (none) | | Absolute window in **plant local time**, format `YYYY-MM-DD HH:mm:ss` (seconds/millis optional, `T` or `%20` as separator). Either bound may be given alone (open-ended). Inclusive. Cannot be combined with `hours` (400) |
 | `excludeFaults` | bool | `true` | | Drop quality-fault noise (`Message LIKE 'Alarm fault%'`). Pass `false` to see everything |
 | `source` | string | (none) | | Exact `SourceName` filter — only events from this one source |
-| `condition` | string | (none) | | Exact `ConditionName` filter — e.g. `condition=TRIP` for trips only, `condition=EVENT` for events only (also `HI`, `LO`). One value per request; combines with all other params |
+| `condition` | string | (none) | | `ConditionName` family filter — e.g. `condition=TRIP` for trips (includes `TRIP_L` and other `TRIP_*` variants), `condition=EVENT` for events only (also `HI`, `LO`). One value per request; combines with all other params |
 | `group` | string | (none) | | Plant/area filter: **exact** `GroupPath` value, e.g. `group=Ball Mill.Alarm_BallMill`. Pick a value from `/groups` |
 
 **Example:** `GET /api/alm/recent?limit=3&source=CV_2_OPEN_CMN`
@@ -137,7 +137,7 @@ summary" panel — e.g. all TRIPs currently in effect.
 
 | Query param | Type | Default | Allowed | Meaning |
 |---|---|---|---|---|
-| `condition` | string | (none) | | Exact `ConditionName`, e.g. `condition=TRIP` |
+| `condition` | string | (none) | | `ConditionName` family, e.g. `condition=TRIP` (includes `TRIP_L`) |
 | `group` | string | (none) | | Exact `GroupPath` value (see `/groups`) |
 | `acked` | bool | (none) | | `false` = only unacknowledged standing alarms; `true` = only acknowledged; omitted = both |
 | `hours` | int | 168 | 1–720 | Look-back window used to find each alarm's latest event. An alarm standing longer than the window is missed — raise this if alarms stay up for weeks |
@@ -375,7 +375,7 @@ it contains special characters (1–255 characters).
 | `limit` | int | 100 | 1–5000 | Max rows returned |
 | `hours` | int | 168 (7 days) | 1–720 | Look-back window from now |
 | `from` / `to` | datetime | (none) | | Absolute window in plant local time (same rules as `/recent`); overrides the 168 h default, cannot combine with `hours` |
-| `condition` | string | (none) | | Exact `ConditionName` filter, e.g. `condition=TRIP` |
+| `condition` | string | (none) | | `ConditionName` family filter, e.g. `condition=TRIP` (includes `TRIP_L`) |
 
 **Example:** `GET /api/alm/source/CV_2_OPEN_CMN?limit=2&hours=24`
 

@@ -49,4 +49,13 @@ function dateParam(raw, name, tzOffsetHours) {
   return { value: new Date(Date.UTC(y, mo - 1, d, h, mi, s, ms) - tzOffsetHours * 3600000) };
 }
 
-module.exports = { intParam, boolParam, dateParam };
+// conditionPattern('TRIP') -> 'TRIP[_]%' — LIKE pattern for the underscore-
+// suffixed variants of a condition family, so ?condition=TRIP also matches
+// TRIP_L (and any future TRIP_H) while ?condition=TRIP_L stays exact.
+// LIKE wildcard chars in the name itself are bracket-escaped so a value like
+// 'TRIP_L' or '%' matches literally instead of acting as a wildcard.
+function conditionPattern(name) {
+  return name.replace(/[[\]%_]/g, ch => `[${ch}]`) + '[_]%';
+}
+
+module.exports = { intParam, boolParam, dateParam, conditionPattern };

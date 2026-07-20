@@ -1,6 +1,6 @@
 // Unit tests for the alarm module's param validators. Offline — requires only
 // api/alarms/params.js (no mssql, no pool construction).
-const { intParam, boolParam, dateParam } = require('../api/alarms/params');
+const { intParam, boolParam, dateParam, conditionPattern } = require('../api/alarms/params');
 
 let failed = 0;
 function check(name, cond) {
@@ -58,6 +58,13 @@ check('Feb 30 -> error', dateParam('2026-02-30 00:00:00', 'from', 7).error !== u
 check('bad hour -> error', dateParam('2026-07-10 24:00:00', 'from', 7).error !== undefined);
 check('date-only -> error (time required)', dateParam('2026-07-10', 'from', 7).error !== undefined);
 check('array -> error', dateParam(['2026-07-10 08:00:00'], 'from', 7).error !== undefined);
+
+// conditionPattern (family LIKE pattern: TRIP -> matches TRIP_L, not TRIPLE)
+check("TRIP -> 'TRIP[_]%'", conditionPattern('TRIP') === 'TRIP[_]%');
+check("TRIP_L escapes its own underscore -> 'TRIP[_]L[_]%'",
+  conditionPattern('TRIP_L') === 'TRIP[_]L[_]%');
+check("'%' is bracket-escaped, not a wildcard", conditionPattern('%') === '[%][_]%');
+check("'[' is bracket-escaped", conditionPattern('A[B') === 'A[[]B[_]%');
 
 console.log(failed === 0 ? '\nAll alarm-param checks passed' : `\n${failed} check(s) FAILED`);
 process.exit(failed === 0 ? 0 : 1);
