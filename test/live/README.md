@@ -17,6 +17,12 @@ Run with `node test/live/<script>.js`. Exit code 0 = all checks passed.
   windows).
 - `test-24h-diff.js` — full-day (24h) count diff + per-machine gap-fill
   runtime table + tariff bucket integrity. Slow (wide windows).
+- `test-plants-perf-diff.js` — regression for the 2026-07-20 performance
+  rework (SQL-side `/avg`+`/calCap`, trimmed window/count fetches, parallel
+  root listing): every plant's window/avg/count routes byte-compared on fixed
+  July 2026 windows, plus edge cases (unknown tag, empty window, missing
+  threshold) and untouched WL routes. Only whitelisted diff: `avg`/`cap` may
+  differ in the last decimals (compared at relative 1e-9).
 
 Note: `test-prod-diff.js` and `test-24h-diff.js` predate the default flip, so
 their default `/count*` comparisons now show expected diffs on gap-affected

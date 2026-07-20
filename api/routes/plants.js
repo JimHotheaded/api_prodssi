@@ -17,21 +17,27 @@ poolConnect
 
 router.get('/', async (req, res) => {
   try {
-    const tagBM2_con = await pool.request().query`SELECT TagBallMill_Conveyor.TagName, TagBallMill_Conveyor.TagIndex FROM [REPL_BallMill_Conveyor_LOG].[dbo].[TagBallMill_Conveyor]`;
-    const tagBM2 = await pool.request().query`SELECT TagBallMill.TagName, TagBallMill.TagIndex FROM [REPL_BallMill_Log].[dbo].[TagBallMill]`;
-    const tagCT6_con = await pool.request().query`SELECT TagCoating_MC6_Con.TagName, TagCoating_MC6_Con.TagIndex FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con]`;
-    const tagCT6_heater = await pool.request().query`SELECT TagCoating_MC6_Heater.TagName, TagCoating_MC6_Heater.TagIndex FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater]`;
-    const tagCT7_con = await pool.request().query`SELECT TagCoating_MC7_Conveyor.TagName, TagCoating_MC7_Conveyor.TagIndex FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor]`;
-    const tagCT7_heater = await pool.request().query`SELECT TagCoating_MC7.TagName, TagCoating_MC7.TagIndex FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7]`;
-    const tagCSH = await pool.request().query`SELECT TagName.TagName, TagName.TagIndex FROM [REPL_Crushing_Log].[dbo].[TagName]`;
-    const tagFeedRaw = await pool.request().query`SELECT TagFeedRaw.TagName, TagFeedRaw.TagIndex FROM [REPL_FeedRaw_Log].[dbo].[TagFeedRaw]`;
-    const tagHYD = await pool.request().query`SELECT TagHydraulic.TagName, TagHydraulic.TagIndex FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic]`;
-    const tagRMM1 = await pool.request().query`SELECT TagRayMondMill.TagName, TagRayMondMill.TagIndex FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill]`;
-    const tagRMM2 = await pool.request().query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`;
-    const tagWL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`;
-    const tagRRM = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
-    const tagLC_CSH = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_LC_CSH].[dbo].[TagTable]`;
-    const tagHour_OFIL = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`;
+    // One round-trip per plant, all in flight at once — sequential awaits made
+    // this listing pay 15 network round-trips back to back.
+    const [tagBM2_con, tagBM2, tagCT6_con, tagCT6_heater, tagCT7_con, tagCT7_heater,
+           tagCSH, tagFeedRaw, tagHYD, tagRMM1, tagRMM2, tagWL, tagRRM, tagLC_CSH,
+           tagHour_OFIL] = await Promise.all([
+      pool.request().query`SELECT TagBallMill_Conveyor.TagName, TagBallMill_Conveyor.TagIndex FROM [REPL_BallMill_Conveyor_LOG].[dbo].[TagBallMill_Conveyor]`,
+      pool.request().query`SELECT TagBallMill.TagName, TagBallMill.TagIndex FROM [REPL_BallMill_Log].[dbo].[TagBallMill]`,
+      pool.request().query`SELECT TagCoating_MC6_Con.TagName, TagCoating_MC6_Con.TagIndex FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con]`,
+      pool.request().query`SELECT TagCoating_MC6_Heater.TagName, TagCoating_MC6_Heater.TagIndex FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater]`,
+      pool.request().query`SELECT TagCoating_MC7_Conveyor.TagName, TagCoating_MC7_Conveyor.TagIndex FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor]`,
+      pool.request().query`SELECT TagCoating_MC7.TagName, TagCoating_MC7.TagIndex FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7]`,
+      pool.request().query`SELECT TagName.TagName, TagName.TagIndex FROM [REPL_Crushing_Log].[dbo].[TagName]`,
+      pool.request().query`SELECT TagFeedRaw.TagName, TagFeedRaw.TagIndex FROM [REPL_FeedRaw_Log].[dbo].[TagFeedRaw]`,
+      pool.request().query`SELECT TagHydraulic.TagName, TagHydraulic.TagIndex FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic]`,
+      pool.request().query`SELECT TagRayMondMill.TagName, TagRayMondMill.TagIndex FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill]`,
+      pool.request().query`SELECT TagRaymondMill2.TagName, TagRaymondMill2.TagIndex FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]`,
+      pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_WL_LOG].[dbo].[TagTable]`,
+      pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`,
+      pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_LC_CSH].[dbo].[TagTable]`,
+      pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`,
+    ]);
 
     res.json([
       {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
@@ -113,14 +119,25 @@ router.get('/BM2_con/:tagIndex', async (req, res) => {
 router.get('/BM2_con/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-      SELECT FloatBallMill_Conveyor.DateAndTime,FloatBallMill_Conveyor.Val,FloatBallMill_Conveyor.TagIndex ,TagBallMill_Conveyor.TagName
-  FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
-  INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
-  WHERE DateAndTime between ${tbf} and ${taf}
-  and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
-  and FloatBallMill_Conveyor.Status <> 'E'
-  ORDER BY DateAndTime DESC`;
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
+FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_BallMill_Conveyor_Log].[dbo].[TagBallMill_Conveyor] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -131,19 +148,27 @@ router.get('/BM2_con/:tagIndex/:tbf/:taf', async (req, res) => {
 router.get('/BM2_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-      SELECT FloatBallMill_Conveyor.DateAndTime,FloatBallMill_Conveyor.Val,FloatBallMill_Conveyor.TagIndex ,TagBallMill_Conveyor.TagName
-  FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
-  INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
-  WHERE DateAndTime between ${tbf} and ${taf}
-  and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
-  and FloatBallMill_Conveyor.Status <> 'E'
-  ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
+FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_BallMill_Conveyor_Log].[dbo].[TagBallMill_Conveyor] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -162,21 +187,28 @@ router.get('/countBM2_con', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-      SELECT FloatBallMill_Conveyor.DateAndTime,FloatBallMill_Conveyor.Val,FloatBallMill_Conveyor.TagIndex ,TagBallMill_Conveyor.TagName
-  FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
-  INNER JOIN REPL_BallMill_Conveyor_LOG.dbo.TagBallMill_Conveyor ON FloatBallMill_Conveyor.TagIndex = TagBallMill_Conveyor.TagIndex
-  WHERE DateAndTime between ${tbf} and ${taf}
-  and FloatBallMill_Conveyor.TagIndex = ${tagIndex}
-  and FloatBallMill_Conveyor.Status <> 'E'
-  ORDER BY DateAndTime DESC`;
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
+FROM [REPL_BallMill_Conveyor_Log].[dbo].[FloatBallMill_Conveyor]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_BallMill_Conveyor_Log].[dbo].[TagBallMill_Conveyor] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -241,14 +273,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/BM2/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatBallMill.DateAndTime,FloatBallMill.Val,FloatBallMill.TagIndex ,TagBallMill.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
-INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatBallMill.TagIndex = ${tagIndex}
-and FloatBallMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_BallMill_Log].[dbo].[TagBallMill] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -259,19 +302,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/BM2/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatBallMill.DateAndTime,FloatBallMill.Val,FloatBallMill.TagIndex ,TagBallMill.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
-INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatBallMill.TagIndex = ${tagIndex}
-and FloatBallMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_BallMill_Log].[dbo].[TagBallMill] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -290,21 +341,28 @@ router.get('/countBM2', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatBallMill.DateAndTime,FloatBallMill.Val,FloatBallMill.TagIndex ,TagBallMill.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
-INNER JOIN REPL_BallMill_Log.dbo.TagBallMill ON FloatBallMill.TagIndex = TagBallMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatBallMill.TagIndex = ${tagIndex}
-and FloatBallMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_BallMill_Log].[dbo].[TagBallMill] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -369,14 +427,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT6_con/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Con.DateAndTime,FloatCoating_MC6_Con.Val,FloatCoating_MC6_Con.TagIndex ,TagCoating_MC6_Con.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
-INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Con.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -387,19 +456,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT6_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Con.DateAndTime,FloatCoating_MC6_Con.Val,FloatCoating_MC6_Con.TagIndex ,TagCoating_MC6_Con.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
-INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Con.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -418,21 +495,28 @@ router.get('/countCT6_con', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Con.DateAndTime,FloatCoating_MC6_Con.Val,FloatCoating_MC6_Con.TagIndex ,TagCoating_MC6_Con.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[FloatCoating_MC6_Con]
-INNER JOIN REPL_Coating_MC6_Conveyor_LOG.dbo.TagCoating_MC6_Con ON FloatCoating_MC6_Con.TagIndex = TagCoating_MC6_Con.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Con.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Con.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -497,14 +581,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT6_heater/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Heater.DateAndTime,FloatCoating_MC6_Heater.Val,FloatCoating_MC6_Heater.TagIndex ,TagCoating_MC6_Heater.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
-INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Heater.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -515,19 +610,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT6_heater/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Heater.DateAndTime,FloatCoating_MC6_Heater.Val,FloatCoating_MC6_Heater.TagIndex ,TagCoating_MC6_Heater.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
-INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Heater.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -546,21 +649,28 @@ router.get('/countCT6_heater', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC6_Heater.DateAndTime,FloatCoating_MC6_Heater.Val,FloatCoating_MC6_Heater.TagIndex ,TagCoating_MC6_Heater.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
-INNER JOIN REPL_Coating_MC6_Heater_Log.dbo.TagCoating_MC6_Heater ON FloatCoating_MC6_Heater.TagIndex = TagCoating_MC6_Heater.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC6_Heater.TagIndex = ${tagIndex}
-and FloatCoating_MC6_Heater.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -625,14 +735,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT7_con/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
-INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
-and FloatCoating_MC7_Conveyor.Status <>'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <>'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -643,19 +764,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT7_con/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
-INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
-and FloatCoating_MC7_Conveyor.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -666,19 +795,26 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT7_con/:tagIndex/:tbf/:taf/calCap', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
+    // Aggregate in SQL instead of fetching every row (same rework as /avg);
+    // cap = SUM(Val)/6, and the sum can differ from the old JS total in the
+    // last decimals (float summation order). max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, SUM(Val) AS sumVal, COUNT(*) AS n
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
-INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
-and FloatCoating_MC7_Conveyor.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const capVal = calCap(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const capVal = ok ? a.sumVal / 6 : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, cap: capVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -697,21 +833,28 @@ router.get('/countCT7_con', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC7_Conveyor.DateAndTime,FloatCoating_MC7_Conveyor.Val,FloatCoating_MC7_Conveyor.TagIndex ,TagCoating_MC7_Conveyor.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[FloatCoating_MC7_Conveyor]
-INNER JOIN REPL_Coating_MC7_Conveyor_Log.dbo.TagCoating_MC7_Conveyor ON FloatCoating_MC7_Conveyor.TagIndex = TagCoating_MC7_Conveyor.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7_Conveyor.TagIndex = ${tagIndex}
-and FloatCoating_MC7_Conveyor.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Conveyor_Log].[dbo].[TagCoating_MC7_Conveyor] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -776,14 +919,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT7_heater/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatCoating_MC7.DateAndTime,FloatCoating_MC7.Val,FloatCoating_MC7.TagIndex ,TagCoating_MC7.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
-INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7.TagIndex = ${tagIndex}
-and FloatCoating_MC7.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -794,19 +948,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/CT7_heater/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC7.DateAndTime,FloatCoating_MC7.Val,FloatCoating_MC7.TagIndex ,TagCoating_MC7.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
-INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7.TagIndex = ${tagIndex}
-and FloatCoating_MC7.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -825,21 +987,28 @@ router.get('/countCT7_heater', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatCoating_MC7.DateAndTime,FloatCoating_MC7.Val,FloatCoating_MC7.TagIndex ,TagCoating_MC7.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
-INNER JOIN REPL_Coating_MC7_Log.dbo.TagCoating_MC7 ON FloatCoating_MC7.TagIndex = TagCoating_MC7.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatCoating_MC7.TagIndex = ${tagIndex}
-and FloatCoating_MC7.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -904,14 +1073,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/RRM/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RingRollerMill].[dbo].[FloatTable]
-INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_RingRollerMill].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -922,19 +1102,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/RRM/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_RingRollerMill].[dbo].[FloatTable]
-INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_RingRollerMill].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -953,21 +1141,28 @@ router.get('/countRRM', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RingRollerMill].[dbo].[FloatTable]
-INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_RingRollerMill].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1032,14 +1227,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/LC_CSH/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_LC_CSH].[dbo].[FloatTable]
-INNER JOIN REPL_LC_CSH.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_LC_CSH].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -1050,19 +1256,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/LC_CSH/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_LC_CSH].[dbo].[FloatTable]
-INNER JOIN REPL_LC_CSH.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_LC_CSH].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1081,14 +1295,21 @@ router.get('/countLC_CSH', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_LC_CSH].[dbo].[FloatTable]
-INNER JOIN REPL_LC_CSH.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_LC_CSH].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // No gap fill here: LC_CSH logs on-change with no fixed cadence (measured
     // intervals 1-56s), so a cadence-based fill would fabricate rows and the
     // sample-count run-hours are not meaningful anyway. fillGaps param ignored.
@@ -1096,7 +1317,7 @@ ORDER BY DateAndTime DESC`;
     const fillGapsMeta = null;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1161,14 +1382,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/Hour_OFIL/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
-INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E' AND Status <> 'U' AND Status <> 'S'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Hour_OFIL].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       // No fillGaps here: Hour_OFIL tags are cumulative counters — holding a
       // counter flat across a gap understates it, so gaps must stay visible.
       res.json(result.recordset);
@@ -1181,19 +1413,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/Hour_OFIL/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
-INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E' AND Status <> 'U' AND Status <> 'S'`,
+      pool.request().query`SELECT TagName FROM [REPL_Hour_OFIL].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1212,21 +1452,28 @@ router.get('/countHour_OFIL', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Hour_OFIL].[dbo].[FloatTable]
-INNER JOIN REPL_Hour_OFIL.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatTable.TagIndex = ${tagIndex}
-and FloatTable.Status <> 'E' AND FloatTable.Status <> 'U' AND FloatTable.Status <> 'S'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E' AND Status <> 'U' AND Status <> 'S'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Hour_OFIL].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // No gap fill: Hour_OFIL tags are cumulative counters — synthesizing
     // samples would fabricate counter progress. fillGaps param is ignored.
     const data = result.recordset;
     const fillGapsMeta = null;
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1291,14 +1538,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/CSH/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatValue.DateAndTime,FloatValue.Val,FloatValue.TagIndex ,TagName.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Crushing_Log].[dbo].[FloatValue]
-INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatValue.TagIndex = ${tagIndex}
-and FloatValue.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Crushing_Log].[dbo].[TagName] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -1309,19 +1567,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/CSH/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatValue.DateAndTime,FloatValue.Val,FloatValue.TagIndex ,TagName.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Crushing_Log].[dbo].[FloatValue]
-INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatValue.TagIndex = ${tagIndex}
-and FloatValue.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Crushing_Log].[dbo].[TagName] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1340,21 +1606,28 @@ router.get('/countCSH', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatValue.DateAndTime,FloatValue.Val,FloatValue.TagIndex ,TagName.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Crushing_Log].[dbo].[FloatValue]
-INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatValue.TagIndex = ${tagIndex}
-and FloatValue.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Crushing_Log].[dbo].[TagName] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1419,14 +1692,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/FeedRaw/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-    SELECT FloatFeedRaw.DateAndTime,FloatFeedRaw.Val,FloatFeedRaw.TagIndex ,TagFeedRaw.TagName
-  FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
-  INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
-  WHERE DateAndTime between ${tbf} and ${taf}
-  and FloatFeedRaw.TagIndex = ${tagIndex}
-  and FloatFeedRaw.Status <> 'E'
-  ORDER BY DateAndTime DESC`;
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
+FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_FeedRaw_Log].[dbo].[TagFeedRaw] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -1437,19 +1721,27 @@ router.get('/FeedRaw/:tagIndex/:tbf/:taf', async (req, res) => {
 router.get('/FeedRaw/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatFeedRaw.DateAndTime,FloatFeedRaw.Val,FloatFeedRaw.TagIndex ,TagFeedRaw.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
-INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatFeedRaw.TagIndex = ${tagIndex}
-and FloatFeedRaw.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_FeedRaw_Log].[dbo].[TagFeedRaw] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1468,21 +1760,28 @@ router.get('/countFeedRaw', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatFeedRaw.DateAndTime,FloatFeedRaw.Val,FloatFeedRaw.TagIndex ,TagFeedRaw.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_FeedRaw_Log].[dbo].[FloatFeedRaw]
-INNER JOIN REPL_FeedRaw_Log.dbo.TagFeedRaw ON FloatFeedRaw.TagIndex = TagFeedRaw.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatFeedRaw.TagIndex = ${tagIndex}
-and FloatFeedRaw.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_FeedRaw_Log].[dbo].[TagFeedRaw] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1547,14 +1846,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/HYD/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
-INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatHydraulic.TagIndex = ${tagIndex}
-and FloatHydraulic.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -1565,19 +1875,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/HYD/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
-INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatHydraulic.TagIndex = ${tagIndex}
-and FloatHydraulic.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1596,21 +1914,28 @@ router.get('/countHYD', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatHydraulic.DateAndTime,FloatHydraulic.Val,FloatHydraulic.TagIndex ,TagHydraulic.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
-INNER JOIN REPL_Hydraulic_Log.dbo.TagHydraulic ON FloatHydraulic.TagIndex = TagHydraulic.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatHydraulic.TagIndex = ${tagIndex}
-and FloatHydraulic.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
@@ -1675,14 +2000,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/RMM1/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
-INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRayMondMill.TagIndex = ${tagIndex}
-and FloatRayMondMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       // RMM1 logs at 15s since 2026-07-09 ~09:18; opt-in ?fillGaps=true
       // defaults to cadence 15 here (&cadence= still wins).
       res.json(applyFillGaps(result.recordset, { cadence: '15', ...req.query }));
@@ -1695,19 +2031,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/RMM1/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
-INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRayMondMill.TagIndex = ${tagIndex}
-and FloatRayMondMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1738,14 +2082,21 @@ router.get('/countRMM1', async (req, res) => {
   // route era-splits at RMM1_CADENCE_CHANGE automatically.
   const forced = Number(req.query.pointsPerHour) > 0 || req.query.cadence !== undefined;
   try {
-    const result = await pool.request().query`
-  SELECT FloatRayMondMill.DateAndTime,FloatRayMondMill.Val,FloatRayMondMill.TagIndex ,TagRayMondMill.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
-INNER JOIN REPL_RaymondMill_Log.dbo.TagRayMondMill ON FloatRayMondMill.TagIndex = TagRayMondMill.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRayMondMill.TagIndex = ${tagIndex}
-and FloatRayMondMill.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Same options as every other count route; pointsPerHour is set per era.
     const hourOpts = {
       timeField: 'DateAndTime',
@@ -1763,7 +2114,7 @@ ORDER BY DateAndTime DESC`;
           rows: result.recordset.filter(r => (new Date(r.DateAndTime).getTime() <= changeMs) === (i === 0)),
         }));
     let count = 0, hour = 0, distHour = null, fillGapsMeta = null;
-    const tagName = returnTagName(result.recordset);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     for (const seg of segments) {
       if (seg.rows.length === 0) continue;
       // Gap fill is on by default (?fillGaps=false returns the raw count);
@@ -1843,14 +2194,25 @@ ORDER BY DateAndTime DESC`;
 router.get('/RMM2/:tagIndex/:tbf/:taf', async (req, res) => {
     const {tagIndex,tbf,taf} = req.params;
     try {
-      const result = await pool.request().query`
-  SELECT FloatRaymondMill2.DateAndTime,FloatRaymondMill2.Val,FloatRaymondMill2.TagIndex ,TagRaymondMill2.TagName
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
-INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRaymondMill2.TagIndex = ${tagIndex}
-and FloatRaymondMill2.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
       res.json(applyFillGaps(result.recordset, req.query));
     } catch (err) {
       console.error('Database query error:', err);
@@ -1861,19 +2223,27 @@ ORDER BY DateAndTime DESC`;
 router.get('/RMM2/:tagIndex/:tbf/:taf/avg', async (req, res) => {
   const {tagIndex,tbf,taf} = req.params;
   try {
-    const result = await pool.request().query`
-  SELECT FloatRaymondMill2.DateAndTime,FloatRaymondMill2.Val,FloatRaymondMill2.TagIndex ,TagRaymondMill2.TagName
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
 FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
-INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRaymondMill2.TagIndex = ${tagIndex}
-and FloatRaymondMill2.Status <> 'E'
-ORDER BY DateAndTime DESC`;
-  const data = result.recordset;
-  const tagName = returnTagName(data);
-  const maxVal = findMax(data, 'Val');
-  const minVal = findMin(data, 'Val');
-  const avgVal = calculateAverage(data, 'Val');
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? tag.recordset[0].TagName : null;
+  const maxVal = ok ? a.maxVal : null;
+  const minVal = ok ? a.minVal : null;
+  const avgVal = ok ? a.avgVal : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1892,21 +2262,28 @@ router.get('/countRMM2', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    const result = await pool.request().query`
-  SELECT FloatRaymondMill2.DateAndTime,FloatRaymondMill2.Val,FloatRaymondMill2.TagIndex ,TagRaymondMill2.TagName
+    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
+    // the per-row TagName join was pure transfer cost.
+    const [result, tagQ] = await Promise.all([
+      pool.request().query`
+  SELECT DateAndTime, Val
 FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
-INNER JOIN REPL_RaymondMill2_Log.dbo.TagRaymondMill2 ON FloatRaymondMill2.TagIndex = TagRaymondMill2.TagIndex
 WHERE DateAndTime between ${tbf} and ${taf}
-and FloatRaymondMill2.TagIndex = ${tagIndex}
-and FloatRaymondMill2.Status <> 'E'
-ORDER BY DateAndTime DESC`;
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+      pool.request().query`SELECT TagName FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2] WHERE TagIndex = ${tagIndex}`,
+    ]);
+    // The old query INNER JOINed the tag table: unknown tag -> no rows
+    // (count 0, tagName null), reproduced here.
+    if (tagQ.recordset.length === 0) result.recordset = [];
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
     // legacy raw count (meta null, output identical to production).
     const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
     const count = countValues(data, 'Val', '>', thresholdValue);
     const hour = count/pointsPerHour;
-    const tagName = returnTagName(data);
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
   timeField: 'DateAndTime',
   // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
