@@ -130,6 +130,15 @@ async function warmup(base) {
          c.body.fillGaps.fillGapsOptions.cadenceS === 10 &&
          c.body.fillGaps.fillGapsOptions.eras === undefined,
          JSON.stringify(c.body.fillGaps.fillGapsOptions));
+    } else if (m.plant === 'RRM') {
+      // RRM tags are returned under friendly names (api/tagDisplay.js), so the
+      // body differs from production by tagName alone. Everything numeric must
+      // still match exactly. (Values are scaled too, but count routes report
+      // sample counts, not values — and the threshold is scaled to match.)
+      const strip = t => { const { tagName, ...rest } = JSON.parse(t); return JSON.stringify(rest); };
+      ok('countRRM pre-change identical apart from the renamed tag',
+         strip(c.text) === strip(p.text) && c.body.tagName === 'M205_Host_Current',
+         `cand ${c.text.slice(0, 220)}\n       prod ${p.text.slice(0, 220)}`);
     } else {
       ok(`count${m.plant} pre-change byte-identical`, c.text === p.text,
          `cand ${c.text.slice(0, 220)}\n       prod ${p.text.slice(0, 220)}`);

@@ -3,6 +3,8 @@ const router = express.Router();
 const sql = require('mssql');
 const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, countValuesHourFine, isHolidayUTC, applyFillGaps, fillGapsForCount, holidays } = require('../../utils');
 const {dbConfig_PROD} = require('../../config');
+// Friendly tag names + engineering-unit scaling on the way out (RRM only today).
+const { displayName, divisorFor, scaleValue, presentRows, presentTagList, presentWindow } = require('../tagDisplay');
 
 const pool = new sql.ConnectionPool(dbConfig_PROD);
 const poolConnect = pool.connect();
@@ -457,6 +459,7 @@ router.get('/', async (req, res) => {
       {"message":["//how to use// {host}:3334/plants/{plant}/all,{tag_id}/{time_before}/{time_after}/avg",
                         "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
                         "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
+      {"note_RRM":"RRM tags are returned with friendly names (M208_Feeder_Current, ...) and values converted to engineering units (raw historian integers /10, feeder current /100). countRRM's &threshold= is in those same converted units. The historian itself is unchanged."},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
@@ -475,7 +478,7 @@ router.get('/', async (req, res) => {
       {"RMM1":"Raymond Mill1","tags":tagRMM1.recordset},
       {"RMM2":"Raymond Mill2","tags":tagRMM2.recordset},
       {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset},
-      {"RRM":"RingRollerMill","tags":tagRRM.recordset},
+      {"RRM":"RingRollerMill","tags":presentTagList('RRM', tagRRM.recordset)},
       {"LC_CSH":"Loadcell Crushing","tags":tagLC_CSH.recordset},
       {"Hour_OFIL":"Hour OFIL","tags":tagHour_OFIL.recordset}
     ]);
@@ -1342,7 +1345,7 @@ router.get('/countCT7_heater', async (req, res) => {
 router.get('/RRM', async (req, res) => {
   try {
     const result = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`;
-    res.json(result.recordset);
+    res.json(presentTagList('RRM', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1357,7 +1360,7 @@ FROM [REPL_RingRollerMill].[dbo].[FloatTable]
 INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
 WHERE FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    res.json(result.recordset);
+    res.json(presentRows('RRM', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1374,7 +1377,7 @@ INNER JOIN REPL_RingRollerMill.dbo.TagTable ON FloatTable.TagIndex = TagTable.Ta
 and FloatTable.TagIndex = ${tagIndex}
 and FloatTable.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    res.json(result.recordset);
+    res.json(presentRows('RRM', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1404,7 +1407,10 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('RRM', taf), ...req.query }));
+      // Rename/scale AFTER the fill so gap detection still sees raw values and
+      // the synthetic rows it adds are converted along with the real ones.
+      res.json(presentWindow('RRM',
+        applyFillGaps(result.recordset, { cadence: defaultCadenceFor('RRM', taf), ...req.query })));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1431,10 +1437,10 @@ and Status <> 'E'`,
   // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
   // nulls from the JS helpers; reproduce that exactly.
   const ok = a.n > 0 && tag.recordset.length > 0;
-  const tagName = ok ? tag.recordset[0].TagName : null;
-  const maxVal = ok ? a.maxVal : null;
-  const minVal = ok ? a.minVal : null;
-  const avgVal = ok ? a.avgVal : null;
+  const tagName = ok ? displayName('RRM', tagIndex, tag.recordset[0].TagName) : null;
+  const maxVal = ok ? scaleValue('RRM', tagIndex, a.maxVal) : null;
+  const minVal = ok ? scaleValue('RRM', tagIndex, a.minVal) : null;
+  const avgVal = ok ? scaleValue('RRM', tagIndex, a.avgVal) : null;
   res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1455,13 +1461,21 @@ router.get('/countRRM', async (req, res) => {
     // Samples per hour comes from the tag's logging cadence at the time each
     // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
     // one cadence over the whole window.
+    // RRM values are reported in engineering units, so &threshold= is too:
+    // scale it back up to the raw stored integer before comparing. count/hour
+    // and the TOU buckets are sample counts, unaffected by the conversion.
     const r = await runCountEras(pool, {
       plant: 'RRM',
       floatTable: '[REPL_RingRollerMill].[dbo].[FloatTable]',
       tagTable: '[REPL_RingRollerMill].[dbo].[TagTable]',
-      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
+      tagIndex, tbf, taf,
+      threshold: thresholdValue * divisorFor('RRM', tagIndex),
+      query: req.query,
     });
-    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
+    // null tagName means "no rows in this window" and must stay null — don't
+    // let the display map turn an empty window into a named one.
+    const tagName = r.tagName === null ? null : displayName('RRM', tagIndex, r.tagName);
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');

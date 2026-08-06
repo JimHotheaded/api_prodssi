@@ -8,6 +8,10 @@
 //   3. /count* returns 400 on missing/non-numeric threshold
 //   4. /BM2_con/:tagIndex/:tbf/:taf/avg works here (200) while production
 //      still 500s on it (copy-paste typo "TagIndex <> 'E'" fixed in this copy)
+//   5. RRM is served through the display layer (api/tagDisplay.js): friendly
+//      tag names and values in engineering units. Not waved through — the
+//      production body is put through the same transform and must then match
+//      this copy exactly, so the rename and the divisors are actually verified.
 // Live endpoints (/{plant}, /all, latest value) race against ~10s logging:
 // fetch both servers in parallel and retry a mismatch up to 3x before
 // declaring it real.
@@ -29,6 +33,46 @@ const stats = { identical: 0, retried: 0, expected: 0, unexpected: 0 };
 const unexpectedDetails = [];
 const expectedNotes = [];
 
+// --- RRM display layer (expected diff #5) ---------------------------------
+const { presentRows, presentTagList, presentWindow, displayName, scaleValue } =
+  require('../../api/tagDisplay');
+
+const isRrmPath = path => /^\/RRM(\/|$)/.test(path) || path.startsWith('/countRRM');
+const rrmTagIndex = path => {
+  const m = path.match(/^\/RRM\/([^/?]+)/) || path.match(/[?&]tagIndex=([^&]+)/);
+  return m ? m[1] : null;
+};
+
+// Put a production body through the same transform this copy applies, so the
+// comparison proves the rename/scaling rather than merely tolerating a diff.
+function applyRrmDisplay(body, tagIndex) {
+  if (Array.isArray(body)) {
+    return body.length && 'Val' in body[0] ? presentRows('RRM', body)
+                                           : presentTagList('RRM', body);
+  }
+  if (body && typeof body === 'object') {
+    if (Array.isArray(body.readings)) return presentWindow('RRM', body);
+    const out = { ...body };
+    // count/hour/distHour are sample counts — unaffected by the unit change.
+    if ('tagName' in out && out.tagName !== null) {
+      out.tagName = displayName('RRM', tagIndex, out.tagName);
+    }
+    for (const k of ['max', 'min', 'avg']) {
+      if (k in out) out[k] = scaleValue('RRM', tagIndex, out[k]);
+    }
+    return out;
+  }
+  return body;
+}
+
+function rrmMatchesAfterDisplay(path, p, m) {
+  if (!isRrmPath(path) || p.status !== m.status) return false;
+  try {
+    const expected = applyRrmDisplay(JSON.parse(p.text), rrmTagIndex(path));
+    return JSON.stringify(expected) === JSON.stringify(JSON.parse(m.text));
+  } catch { return false; }
+}
+
 async function get(base, path) {
   const res = await fetch(base + path, { signal: AbortSignal.timeout(120000) });
   const text = await res.text();
@@ -46,6 +90,13 @@ async function diffOnce(path, label) {
     console.log(`ok          ${label} (expected: prod 500 bug, fixed in this copy)`);
     return true;
   }
+  // RRM: friendly names + engineering units, verified against the transform
+  if (rrmMatchesAfterDisplay(path, p, m)) {
+    stats.expected++;
+    expectedNotes.push(`${label}: RRM display layer (renamed tag + scaled values) matches exactly`);
+    console.log(`ok          ${label} (expected: RRM renamed/scaled, transform verified)`);
+    return true;
+  }
   stats.unexpected++;
   unexpectedDetails.push({ label, path, ps: p.status, ms: m.status, p: p.text.slice(0, 200), m: m.text.slice(0, 200) });
   console.log(`UNEXPECTED  ${label}  ${path}`);
@@ -59,6 +110,12 @@ async function diffLive(path, label, tries = 4) {
     if (p.status === m.status && p.text === m.text) {
       if (i > 1) { stats.retried++; console.log(`retried-ok  ${label} (attempt ${i})`); }
       else stats.identical++;
+      return true;
+    }
+    if (rrmMatchesAfterDisplay(path, p, m)) {
+      stats.expected++;
+      expectedNotes.push(`${label}: RRM display layer (renamed tag + scaled values) matches exactly`);
+      console.log(`ok          ${label} (expected: RRM renamed/scaled, transform verified)`);
       return true;
     }
     if (i === tries) {
@@ -85,7 +142,12 @@ async function main() {
         .map(o => { const k = Object.keys(o).find(k => k !== 'tags'); return { [k]: o.tags }; }));
       const pt = tagObjs(pj), mt = tagObjs(mj);
       const keys = new Set([...Object.keys(pt), ...Object.keys(mt)]);
-      for (const k of keys) if (JSON.stringify(pt[k]) !== JSON.stringify(mt[k])) ok = false;
+      for (const k of keys) {
+        // RRM's listing carries the friendly names; compare against the
+        // transform so the rename is verified here too.
+        const expected = k === 'RRM' ? presentTagList('RRM', pt[k]) : pt[k];
+        if (JSON.stringify(expected) !== JSON.stringify(mt[k])) ok = false;
+      }
       docDiff = p.text !== m.text;
     }
     if (ok) {
