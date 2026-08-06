@@ -30,11 +30,26 @@ machines; add `&fillGaps=false` legs when adapting them. The golden values in
 `test-count-default-flip.js` use fixed July 2026 windows and stay valid as
 long as the historian retains that data.
 
-RMM1's logging cadence changed 10s → 15s on 2026-07-09 09:18:12, and
-`countRMM1` era-splits windows at that instant automatically (see
-`RMM1_CADENCE_CHANGE` in plants.js). When diffing against a server built
-before the era-split, `countRMM1` rows differ on pre-changeover and
-spanning windows by design; everything else must stay byte-identical.
+- `test-cadence-eras.js` — regression for the per-machine logging-cadence
+  eras (`CADENCE_ERAS` in plants.js). **Does not need a candidate server**:
+  it starts the app in-process on an ephemeral port, and only needs
+  production on :3334 to diff history against. Covers post-changeover
+  windows reading a full 1.0 h, pre-changeover windows staying
+  byte-identical to production, straddling windows totalling 1.0 h across
+  both eras with the boundary row counted exactly once, the
+  `&pointsPerHour=`/`&cadence=` force path, `&fillGaps=false`, the
+  excluded machines, and the window routes' default fill cadence.
+
+Logging cadence changed 10s → 15s for the whole plant on 2026-08-06
+(each machine between 11:27:15 and 11:31:28), and for RMM1 a month
+earlier on 2026-07-09 09:18:12. Count routes era-split at those instants
+automatically. When diffing against a server built before the era-split,
+`count*` rows differ on post-changeover and spanning windows **by design**
+— those are the values being corrected (a full hour of 15s logging read
+0.6667 h under the old fixed 360 divisor). Windows wholly inside one era
+must stay byte-identical; the one intended exception is `countRMM1`,
+whose single-era audit block changes from the nested `eras[]` wrapper to
+the flat `{cadenceS, capS, tolerance}` every other plant uses.
 
 The offline unit test (`node test/fillgaps-unit.js`, also `npm test`) needs
 no network or database.

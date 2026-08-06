@@ -176,11 +176,249 @@ DROP TABLE #holidaySet;
     })),
   } : null;
 
-  // realReadings exposed regardless of doFill so callers (e.g. RMM1's
-  // era-split merge) can tell whether this era/window had any raw rows at
-  // all — needed to skip an era's contribution entirely, matching the old
-  // JS loop's "if (seg.rows.length === 0) continue".
+  // realReadings exposed regardless of doFill so the era-split merge can tell
+  // whether this era had any raw rows at all — an era with none contributes
+  // nothing and gets no entry in the fillGaps audit block.
   return { tagName, count, hour, distHour, distHourFine, fillGapsMeta, realReadings };
+}
+
+/* ------------------------- Kepware log-interval eras -------------------------
+
+Run-hours are sample counts divided by samples-per-hour, so a machine whose
+logging interval changes needs a different divisor either side of the change —
+and the historian keeps both cadences forever, so no single divisor is ever
+right for a window that spans one. Each count{plant} route therefore splits its
+window at the boundaries below and computes each era with its own cadence,
+which is why callers need no query parameters for old, new, or spanning windows.
+
+A boundary is the timestamp of the **last row logged at the old cadence**: era
+n ends at (and includes) it, era n+1 starts just after. Values were measured
+from the historian and verified per machine — every tag inside a database flips
+at the same instant, with the same signature each time (steady old cadence, a
+short Kepware reconnect burst of a few seconds, then steady new cadence).
+
+To record a future interval change: append an era here (close the previous one
+with the same timestamp) and change nothing else. Never delete or edit a past
+era — history logged at 10s stays 10s forever, and dropping an era silently
+corrupts every historical query. Machines absent from this table have no cadence
+history to split: Hour_OFIL logs at 60s (callers pass &pointsPerHour=60), LC_CSH
+logs on change with no fixed cadence, and WL is event data.
+
+The 2026-08-06 entries are the plant-wide 10s -> 15s change; RMM1 changed
+earlier, on 2026-07-09, when it was switched over on its own as a test.
+Timestamps use the same plant-local "fake Z" wire convention as the rest of
+this file (see the timestamp note in CLAUDE.md).                             */
+
+const CADENCE_ERAS = (() => {
+  const CHANGE_2026_08_06 = {
+    BM2_con:    '2026-08-06T11:27:15.000Z',
+    BM2:        '2026-08-06T11:27:25.000Z',
+    CT6_con:    '2026-08-06T11:28:05.000Z',
+    CT6_heater: '2026-08-06T11:29:24.000Z',
+    CT7_con:    '2026-08-06T11:30:05.000Z',
+    CT7_heater: '2026-08-06T11:30:16.000Z',
+    CSH:        '2026-08-06T11:30:24.000Z',
+    FeedRaw:    '2026-08-06T11:30:36.000Z',
+    HYD:        '2026-08-06T11:30:56.000Z',
+    RMM2:       '2026-08-06T11:31:17.000Z',
+    RRM:        '2026-08-06T11:31:28.000Z',
+    // RMM1 is not here: it moved to 15s a month earlier, below.
+  };
+  const tenToFifteen = at => [
+    { until: at, pointsPerHour: 360, cadence: '10' },
+    { from:  at, pointsPerHour: 240, cadence: '15' },
+  ];
+  const table = { RMM1: tenToFifteen('2026-07-09T09:18:12.000Z') };
+  for (const [plant, at] of Object.entries(CHANGE_2026_08_06)) table[plant] = tenToFifteen(at);
+  return table;
+})();
+
+// Plant-local naive-datetime string, same "YYYY-MM-DD HH:mm:ss.SSS" format as
+// tbf/taf: an era boundary's UTC fields already hold the plant wall-clock value
+// (same "fake Z" convention as everywhere else in this file).
+function formatPlantLocal(d) {
+  const p2 = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, '0')}`;
+}
+
+// Parse either wire form onto the same scale. tbf/taf arrive as naive plant
+// wall-clock ("2026-08-06 12:00:00.000"), era boundaries as the same wall-clock
+// with the file-wide fake Z ("2026-08-06T11:27:25.000Z"). Both are read as UTC
+// so their epoch values are directly comparable, and so they compare the same
+// way against row timestamps — which the driver also parses as UTC. Parsing the
+// naive form without the Z would make it server-local instead, putting the two
+// sides hours apart and silently assigning rows to the wrong era.
+const toPlantDate = s => {
+  const t = String(s).replace(' ', 'T');
+  return new Date(/[Zz]$|[+-]\d{2}:?\d{2}$/.test(t) ? t : t + 'Z');
+};
+
+// The eras overlapping [tbf, taf], each clamped to the window, in chronological
+// order. Non-overlapping eras are dropped, so a window inside a single era
+// costs exactly one query and returns exactly today's single-era response.
+function erasFor(plant, tbf, taf, query = {}) {
+  const eras = CADENCE_ERAS[plant] || [];
+  const newest = eras[eras.length - 1];
+  const from = toPlantDate(tbf), to = toPlantDate(taf);
+
+  // Explicit &pointsPerHour= or &cadence= forces single-era math over the whole
+  // window (the pre-era-split workaround callers were told to use keeps
+  // working). Unparseable dates fall through here too, so SQL still raises the
+  // same error it always did instead of this helper masking it.
+  const forced = Number(query.pointsPerHour) > 0 || query.cadence !== undefined;
+  if (forced || !eras.length || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    return [{
+      tbf, taf,
+      startMs: from.getTime(), endMs: to.getTime(),
+      pointsPerHour: Number(query.pointsPerHour) > 0 ? Number(query.pointsPerHour)
+                   : (newest ? newest.pointsPerHour : 360),
+      cadence: query.cadence !== undefined ? query.cadence
+             : (newest ? newest.cadence : '10'),
+      label: null,
+    }];
+  }
+
+  const out = [];
+  for (const era of eras) {
+    // Legacy SQL DATETIME columns round to ~3.33ms increments (.000/.003/.007),
+    // so nudging an era's start by +1ms silently rounds back down onto the
+    // boundary instant and would count the boundary row in both eras. +10ms is
+    // clear of that rounding and still negligible against a 10-15s cadence, so
+    // no real row can fall into the gap between two eras.
+    const lo = era.from ? new Date(toPlantDate(era.from).getTime() + 10) : from;
+    const hi = era.until ? toPlantDate(era.until) : to;
+    const startMs = Math.max(from.getTime(), lo.getTime());
+    const endMs = Math.min(to.getTime(), hi.getTime());
+    if (startMs > endMs) continue;
+    out.push({
+      tbf: startMs === from.getTime() ? tbf : formatPlantLocal(new Date(startMs)),
+      taf: endMs === to.getTime() ? taf : formatPlantLocal(new Date(endMs)),
+      startMs, endMs,
+      pointsPerHour: era.pointsPerHour,
+      cadence: era.cadence,
+      label: era.from ? { from: era.from } : { until: era.until },
+    });
+  }
+  return out;
+}
+
+// Default cadence for a window route's opt-in gap fill: the cadence in force at
+// the end of the requested window, so historical windows keep filling at the
+// rate their rows were actually logged at and current ones follow the change.
+// A window straddling a boundary gets the newer of the two — unlike the count
+// routes there is no split to make here, since a window route's raw rows are
+// cadence-independent and only the synthetic fill rows are affected.
+// Explicit &cadence= always wins (it is spread over this default by callers).
+function defaultCadenceFor(plant, taf) {
+  const eras = CADENCE_ERAS[plant] || [];
+  if (!eras.length) return '10';
+  const t = toPlantDate(taf).getTime();
+  let cadence = eras[0].cadence;
+  for (const era of eras) {
+    if (era.from && t > toPlantDate(era.from).getTime()) cadence = era.cadence;
+  }
+  return cadence;
+}
+
+// Combine one era result per era into a single response body. Counts and hours
+// add up directly (each era already divided by its own pointsPerHour), and the
+// TOU buckets add bucket-by-bucket — tariff classification is calendar-based,
+// so a bucket means the same thing in every era.
+function mergeEras(results) {
+  let count = 0, hour = 0, distHour = null, distHourFine = null, tagName = null;
+  for (const r of results) {
+    if (tagName === null) tagName = r.tagName;
+    count += r.count;
+    hour += r.hour;
+    if (!distHour) distHour = { ...r.distHour };
+    else for (const k of Object.keys(r.distHour)) distHour[k] += r.distHour[k];
+    if (!distHourFine) distHourFine = { ...r.distHourFine };
+    else for (const k of Object.keys(r.distHourFine)) distHourFine[k] += r.distHourFine[k];
+  }
+
+  // Audit block: keep the flat single-cadence shape whenever the window sits
+  // inside one era (every historical and every future query), and only describe
+  // the split when the window actually crosses a boundary. Eras with no raw
+  // rows are left out entirely rather than reported as an empty cadence.
+  const withMeta = results.filter(r => r.realReadings > 0 && r.fillGapsMeta);
+  let fillGapsMeta = null;
+  if (withMeta.length === 0) {
+    // Nothing logged anywhere in the window (empty range or unknown tag): still
+    // report the block a single-era run would have, describing the cadence that
+    // would have applied, rather than dropping the key entirely.
+    const any = results.find(r => r.fillGapsMeta);
+    fillGapsMeta = any ? any.fillGapsMeta : null;
+  } else if (withMeta.length === 1) {
+    fillGapsMeta = withMeta[0].fillGapsMeta;
+  } else {
+    const first = withMeta[0].fillGapsMeta.fillGapsOptions;
+    fillGapsMeta = {
+      fillGapsOptions: {
+        eras: withMeta.map(r => ({
+          ...(r.label || {}),
+          cadenceS: r.fillGapsMeta.fillGapsOptions.cadenceS,
+          pointsPerHour: r.pointsPerHour,
+        })),
+        capS: first.capS,
+        tolerance: first.tolerance,
+      },
+      realReadings: withMeta.reduce((s, r) => s + r.fillGapsMeta.realReadings, 0),
+      filledReadings: withMeta.reduce((s, r) => s + r.fillGapsMeta.filledReadings, 0),
+      flaggedGaps: withMeta.flatMap(r => r.fillGapsMeta.flaggedGaps),
+    };
+  }
+  return { tagName, count, hour, distHour, distHourFine, fillGapsMeta };
+}
+
+// SQL-pipeline count route: one runCountQuerySql per era, in parallel, merged.
+async function runCountEras(pool, opts) {
+  const { plant, floatTable, tagTable, tagIndex, tbf, taf, threshold, query } = opts;
+  const eras = erasFor(plant, tbf, taf, query);
+  const results = await Promise.all(eras.map(async era => {
+    const r = await runCountQuerySql(pool, {
+      floatTable, tagTable, tagIndex,
+      tbf: era.tbf, taf: era.taf,
+      threshold, pointsPerHour: era.pointsPerHour,
+      query: { ...query, cadence: era.cadence },
+    });
+    return { ...r, pointsPerHour: era.pointsPerHour, label: era.label };
+  }));
+  return mergeEras(results);
+}
+
+// JS-pipeline count route: same era split over an already-fetched row array,
+// for the routes still using the fetch-rows-into-JS path.
+function countErasJs(rows, opts) {
+  const { plant, tagName, tbf, taf, threshold, query } = opts;
+  const hourOpts = {
+    timeField: 'DateAndTime',
+    // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
+    // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
+    clock: 'utc',
+    isHoliday: isHolidayUTC,
+    returnHours: true,
+  };
+  const results = erasFor(plant, tbf, taf, query).map(era => {
+    const slice = rows.filter(row => {
+      const t = new Date(row.DateAndTime).getTime();
+      return t >= era.startMs && t <= era.endMs;
+    });
+    const { data, meta } = fillGapsForCount(slice, { cadence: era.cadence, ...query });
+    const count = countValues(data, 'Val', '>', threshold);
+    const o = { ...hourOpts, pointsPerHour: era.pointsPerHour };
+    return {
+      tagName,
+      count,
+      hour: count / era.pointsPerHour,
+      distHour: countValuesHour(data, 'Val', '>', threshold, o),
+      distHourFine: countValuesHourFine(data, 'Val', '>', threshold, o),
+      fillGapsMeta: meta,
+      realReadings: slice.length,
+      pointsPerHour: era.pointsPerHour,
+      label: era.label,
+    };
+  });
+  return mergeEras(results);
 }
 
 pool.on('error', err => {
@@ -223,8 +461,8 @@ router.get('/', async (req, res) => {
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
                         "/{plant}/{tag_id}/{time_before}/{time_after}/avg   ==average data",
-                        "/{plant}/{tag_id}/{time_before}/{time_after}?fillGaps=true&cadence=10&cap=90&tolerance=0.2   ==optionally bridge short Kepware logging gaps (hold-last-value, only when gap<=cap seconds AND bracketing values agree within tolerance); unfillable gaps reported in flaggedGaps, synthetic rows marked Filled:true; WL and Hour_OFIL ignore this param (event data / cumulative counters must not be synthesized)",
-                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold; optional &pointsPerHour= overrides the samples-per-hour used for run-hour math (default 360 = 10s cadence; Hour_OFIL logs 60s => 60; RMM1 logs 15s since 2026-07-09 09:18 and countRMM1 handles the changeover automatically — no parameters needed for old, new, or spanning windows; passing &pointsPerHour= or &cadence= forces single-era math); gap fill is ON BY DEFAULT: short Kepware logging blips are bridged before counting so run-hours are not undercounted (response includes a fillGaps audit block; tune with &cadence=&cap=&tolerance=); pass &fillGaps=false for the legacy raw count identical to production :3334; countWL/countHour_OFIL/countLC_CSH never fill (event data / cumulative counter / on-change logging). WARNING: LC_CSH logs on-change (no fixed cadence) — sample-count run-hours are not meaningful for it regardless of parameters"]},
+                        "/{plant}/{tag_id}/{time_before}/{time_after}?fillGaps=true&cadence=10&cap=90&tolerance=0.2   ==optionally bridge short Kepware logging gaps (hold-last-value, only when gap<=cap seconds AND bracketing values agree within tolerance); unfillable gaps reported in flaggedGaps, synthetic rows marked Filled:true; &cadence= defaults to the machine's logging cadence at the end of the requested window (10s before its changeover, 15s after); WL and Hour_OFIL ignore this param (event data / cumulative counters must not be synthesized)",
+                        "/count{plant}?tagIndex={tag_no.}&tbf={time}&taf={time}&threshold={..}    ==count choosen tagdata between choosen time frame and filter with larger selected threshold; run-hour math follows each machine's logging cadence automatically, including machines whose Kepware log interval has changed (the whole plant moved 10s => 15s on 2026-08-06 ~11:30, RMM1 already on 2026-07-09 09:18) — no parameters are needed for windows before, after, or spanning a change, and a spanning window reports both cadences in its fillGaps audit block; optional &pointsPerHour= overrides the samples-per-hour used for run-hour math and forces that one value over the whole window (as does &cadence=), needed only for Hour_OFIL (60s cadence => &pointsPerHour=60); gap fill is ON BY DEFAULT: short Kepware logging blips are bridged before counting so run-hours are not undercounted (response includes a fillGaps audit block; tune with &cadence=&cap=&tolerance=); pass &fillGaps=false for the legacy raw count identical to production :3334; countWL/countHour_OFIL/countLC_CSH never fill (event data / cumulative counter / on-change logging). WARNING: LC_CSH logs on-change (no fixed cadence) — sample-count run-hours are not meaningful for it regardless of parameters"]},
       {"BM2_con":"BallMill2 Conveyor","tags":tagBM2_con.recordset},
       {"BM2":"BallMill2","tags":tagBM2.recordset},
       {"CT6_con":"Coating6 Conveyor","tags":tagCT6_con.recordset},
@@ -314,7 +552,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('BM2_con', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -358,10 +596,6 @@ router.get('/countBM2_con', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
     // the per-row TagName join was pure transfer cost.
@@ -378,31 +612,16 @@ ORDER BY DateAndTime DESC`,
     // The old query INNER JOINed the tag table: unknown tag -> no rows
     // (count 0, tagName null), reproduced here.
     if (tagQ.recordset.length === 0) result.recordset = [];
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
-    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // legacy raw count (meta null, output identical to production). Counting
+    // runs once per logging-cadence era (CADENCE_ERAS) so run-hours use the
+    // cadence each row was actually logged at.
+    const r = countErasJs(result.recordset, {
+      plant: 'BM2_con', tagName, tbf, taf, threshold: thresholdValue, query: req.query,
+    });
+    res.json({tagIndex: tagIndex,tagName:r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -476,7 +695,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('BM2', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -520,18 +739,18 @@ router.get('/countBM2', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'BM2',
       floatTable: '[REPL_BallMill_Log].[dbo].[FloatBallMill]',
       tagTable: '[REPL_BallMill_Log].[dbo].[TagBallMill]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -607,7 +826,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CT6_con', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -651,10 +870,6 @@ router.get('/countCT6_con', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
     // the per-row TagName join was pure transfer cost.
@@ -671,31 +886,16 @@ ORDER BY DateAndTime DESC`,
     // The old query INNER JOINed the tag table: unknown tag -> no rows
     // (count 0, tagName null), reproduced here.
     if (tagQ.recordset.length === 0) result.recordset = [];
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
-    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // legacy raw count (meta null, output identical to production). Counting
+    // runs once per logging-cadence era (CADENCE_ERAS) so run-hours use the
+    // cadence each row was actually logged at.
+    const r = countErasJs(result.recordset, {
+      plant: 'CT6_con', tagName, tbf, taf, threshold: thresholdValue, query: req.query,
+    });
+    res.json({tagIndex: tagIndex,tagName:r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour,distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -769,7 +969,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CT6_heater', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -813,18 +1013,18 @@ router.get('/countCT6_heater', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'CT6_heater',
       floatTable: '[REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]',
       tagTable: '[REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -900,7 +1100,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CT7_con', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -974,10 +1174,6 @@ router.get('/countCT7_con', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
     // the per-row TagName join was pure transfer cost.
@@ -994,31 +1190,16 @@ ORDER BY DateAndTime DESC`,
     // The old query INNER JOINed the tag table: unknown tag -> no rows
     // (count 0, tagName null), reproduced here.
     if (tagQ.recordset.length === 0) result.recordset = [];
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
-    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // legacy raw count (meta null, output identical to production). Counting
+    // runs once per logging-cadence era (CADENCE_ERAS) so run-hours use the
+    // cadence each row was actually logged at.
+    const r = countErasJs(result.recordset, {
+      plant: 'CT7_con', tagName, tbf, taf, threshold: thresholdValue, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName,date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1092,7 +1273,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CT7_heater', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1136,18 +1317,18 @@ router.get('/countCT7_heater', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'CT7_heater',
       floatTable: '[REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]',
       tagTable: '[REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -1223,7 +1404,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('RRM', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1267,18 +1448,18 @@ router.get('/countRRM', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'RRM',
       floatTable: '[REPL_RingRollerMill].[dbo].[FloatTable]',
       tagTable: '[REPL_RingRollerMill].[dbo].[TagTable]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -1681,7 +1862,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CSH', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1725,18 +1906,18 @@ router.get('/countCSH', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'CSH',
       floatTable: '[REPL_Crushing_Log].[dbo].[FloatValue]',
       tagTable: '[REPL_Crushing_Log].[dbo].[TagName]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -1812,7 +1993,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('FeedRaw', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1856,10 +2037,6 @@ router.get('/countFeedRaw', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
     // the per-row TagName join was pure transfer cost.
@@ -1876,31 +2053,16 @@ ORDER BY DateAndTime DESC`,
     // The old query INNER JOINed the tag table: unknown tag -> no rows
     // (count 0, tagName null), reproduced here.
     if (tagQ.recordset.length === 0) result.recordset = [];
+    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
     // Gap fill is on by default: short Kepware logging blips are bridged before
     // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
-    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // legacy raw count (meta null, output identical to production). Counting
+    // runs once per logging-cadence era (CADENCE_ERAS) so run-hours use the
+    // cadence each row was actually logged at.
+    const r = countErasJs(result.recordset, {
+      plant: 'FeedRaw', tagName, tbf, taf, threshold: thresholdValue, query: req.query,
+    });
+    res.json({tagIndex: tagIndex,tagName:r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1974,7 +2136,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('HYD', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -2018,18 +2180,18 @@ router.get('/countHYD', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'HYD',
       floatTable: '[REPL_Hydraulic_Log].[dbo].[FloatHydraulic]',
       tagTable: '[REPL_Hydraulic_Log].[dbo].[TagHydraulic]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
@@ -2105,9 +2267,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      // RMM1 logs at 15s since 2026-07-09 ~09:18; opt-in ?fillGaps=true
-      // defaults to cadence 15 here (&cadence= still wins).
-      res.json(applyFillGaps(result.recordset, { cadence: '15', ...req.query }));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('RMM1', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -2145,108 +2305,23 @@ and Status <> 'E'`,
   }
 });
 
-// RMM1's Kepware log interval changed 10s -> 15s at this instant (plant time,
-// wire format = the fake-Z Bangkok-local convention; measured from the
-// historian: timestamp of the last 10s-cadence row). countRMM1 splits the
-// window here and computes each era with its own cadence, so callers need no
-// parameters for old, new, or spanning windows. If Kepware is rolled back to
-// 10s, remove the second era (or add a third with its own boundary).
-const RMM1_CADENCE_CHANGE = '2026-07-09T09:18:12.000Z';
-const RMM1_ERAS = [
-  { label: { until: RMM1_CADENCE_CHANGE }, pointsPerHour: 360, cadence: '10' },
-  { label: { from: RMM1_CADENCE_CHANGE },  pointsPerHour: 240, cadence: '15' },
-];
-
-// Plant-local naive-datetime string, same "YYYY-MM-DD HH:mm:ss.SSS" format as
-// tbf/taf: RMM1_CADENCE_CHANGE's UTC fields already hold the plant wall-clock
-// value (same "fake Z" convention as everywhere else in this file).
-function formatPlantLocal(d) {
-  const p2 = n => String(n).padStart(2, '0');
-  return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, '0')}`;
-}
-
 router.get('/countRMM1', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Explicit &pointsPerHour= or &cadence= forces single-era math over the
-  // whole window (the pre-era-split workaround keeps working); otherwise the
-  // route era-splits at RMM1_CADENCE_CHANGE automatically.
-  const forced = Number(req.query.pointsPerHour) > 0 || req.query.cadence !== undefined;
   try {
-    // Merges one or two era results (SQL-side, via runCountQuerySql) into the
-    // same shape the old JS era-loop produced, including RMM1's distinctive
-    // fillGaps.fillGapsOptions.eras[] wrapper (unlike every other plant's flat
-    // fillGapsOptions — this route always used that shape, forced or not).
-    async function runEra(eraTbf, eraTaf, pointsPerHour, query, label) {
-      const r = await runCountQuerySql(pool, {
-        floatTable: '[REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]',
-        tagTable: '[REPL_RaymondMill_Log].[dbo].[TagRayMondMill]',
-        tagIndex, tbf: eraTbf, taf: eraTaf, threshold: thresholdValue, pointsPerHour, query,
-      });
-      return { ...r, pointsPerHour, label };
-    }
-
-    let eraResults;
-    if (forced) {
-      const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 240;
-      // Same default as the original: forced-pointsPerHour-only still needs a
-      // cadence, and the original fell back to the post-change era's (15s).
-      const query = { ...req.query, cadence: req.query.cadence !== undefined ? req.query.cadence : '15' };
-      eraResults = [await runEra(tbf, taf, pointsPerHour, query, null)];
-    } else {
-      const changeDate = new Date(RMM1_CADENCE_CHANGE);
-      // Legacy SQL DATETIME columns round to ~3.33ms increments (.000/.003/.007),
-      // so a +1ms nudge silently rounds back down to the exact boundary instant
-      // (verified: CAST('...12.001' AS DATETIME) -> '...12.000') and era1's
-      // clamped range would then include the boundary row a second time,
-      // double-counting it. +10ms is safely clear of that rounding and still
-      // utterly negligible next to the ~10-15s cadence, so no real row can
-      // land in the gap between the two eras.
-      const changePlus1 = new Date(changeDate.getTime() + 10);
-      const changeStr = formatPlantLocal(changeDate);
-      const changePlus1Str = formatPlantLocal(changePlus1);
-      const toDate = s => new Date(s.replace(' ', 'T'));
-      // Clamp each era's range to the requested window; a range where
-      // clampedTbf > clampedTaf naturally yields zero rows (same as the old
-      // "if (seg.rows.length === 0) continue" skip, just via an empty BETWEEN).
-      const era0Taf = toDate(taf) <= changeDate ? taf : changeStr;
-      const era1Tbf = toDate(tbf) >= changePlus1 ? tbf : changePlus1Str;
-      eraResults = await Promise.all([
-        runEra(tbf, era0Taf, 360, { ...req.query, cadence: '10' }, { until: RMM1_CADENCE_CHANGE }),
-        runEra(era1Tbf, taf, 240, { ...req.query, cadence: '15' }, { from: RMM1_CADENCE_CHANGE }),
-      ]);
-    }
-
-    let count = 0, hour = 0, distHour = null, distHourFine = null, fillGapsMeta = null, tagName = null;
-    for (const seg of eraResults) {
-      if (seg.tagName !== null) tagName = seg.tagName;
-      count += seg.count;
-      hour += seg.hour;
-      // Accumulation is safe unconditionally (an empty era's numbers are
-      // already all-zero), but the fillGaps.eras[] entry is only added for
-      // eras that actually had raw rows — matching the old JS loop's
-      // "if (seg.rows.length === 0) continue" (an era with zero rows never
-      // appeared in the eras list, and if ALL eras were empty, fillGapsMeta
-      // stayed null / the fillGaps key was omitted entirely).
-      if (!distHour) distHour = { ...seg.distHour };
-      else for (const k of Object.keys(seg.distHour)) distHour[k] += seg.distHour[k];
-      if (!distHourFine) distHourFine = { ...seg.distHourFine };
-      else for (const k of Object.keys(seg.distHourFine)) distHourFine[k] += seg.distHourFine[k];
-      if (seg.realReadings > 0 && seg.fillGapsMeta) {
-        if (!fillGapsMeta) fillGapsMeta = {
-          fillGapsOptions: { eras: [], capS: seg.fillGapsMeta.fillGapsOptions.capS, tolerance: seg.fillGapsMeta.fillGapsOptions.tolerance },
-          realReadings: 0, filledReadings: 0, flaggedGaps: [],
-        };
-        fillGapsMeta.fillGapsOptions.eras.push({ ...(seg.label || {}), cadenceS: seg.fillGapsMeta.fillGapsOptions.cadenceS, pointsPerHour: seg.pointsPerHour });
-        fillGapsMeta.realReadings += seg.fillGapsMeta.realReadings;
-        fillGapsMeta.filledReadings += seg.fillGapsMeta.filledReadings;
-        fillGapsMeta.flaggedGaps = fillGapsMeta.flaggedGaps.concat(seg.fillGapsMeta.flaggedGaps);
-      }
-    }
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // RMM1 moved to 15s on 2026-07-09, a month before the rest of the plant;
+    // both boundaries live in CADENCE_ERAS and this route is no different from
+    // any other count route now.
+    const r = await runCountEras(pool, {
+      plant: 'RMM1',
+      floatTable: '[REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]',
+      tagTable: '[REPL_RaymondMill_Log].[dbo].[TagRayMondMill]',
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
+    });
+    res.json({tagIndex: tagIndex,tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -2320,7 +2395,7 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, req.query));
+      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('RMM2', taf), ...req.query }));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -2364,18 +2439,18 @@ router.get('/countRMM2', async (req, res) => {
   if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
     return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
   }
-  // Samples per hour at this tag's logging cadence; default 360 (10s cadence).
-  // Slower tags need an override, e.g. &pointsPerHour=60 for Hour_OFIL (60s cadence).
-  // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
-  const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
     // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
     // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
     // approach (CPU-bound single-thread contention under concurrent load).
-    const r = await runCountQuerySql(pool, {
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    const r = await runCountEras(pool, {
+      plant: 'RMM2',
       floatTable: '[REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]',
       tagTable: '[REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]',
-      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
