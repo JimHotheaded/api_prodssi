@@ -1,11 +1,187 @@
 const express = require('express');
 const router = express.Router();
 const sql = require('mssql');
-const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, isHolidayUTC, applyFillGaps, fillGapsForCount } = require('../../utils');
+const { findMax, findMin, calculateAverage, returnTagName, countValues, calSum, calCap, countValuesHour, countValuesHourFine, isHolidayUTC, applyFillGaps, fillGapsForCount, holidays } = require('../../utils');
 const {dbConfig_PROD} = require('../../config');
 
 const pool = new sql.ConnectionPool(dbConfig_PROD);
 const poolConnect = pool.connect();
+
+// Comma-joined for the SQL-side count{plant} routes' STRING_SPLIT holiday lookup
+// (same list utils.js's isHoliday/isHolidayUTC already use for the JS-side routes).
+const HOLIDAYS_CSV = holidays.join(',');
+
+// SQL-side replacement for the fetch-all-rows-into-JS pipeline
+// (fillGapsForCount + countValues + countValuesHour + countValuesHourFine).
+// Gap-fill (bounded, bracket-checked hold-last-value — see
+// 2026-07-07-fillgap-kepware-gaps.md) and TOU/holiday bucketing both run in
+// SQL via a temp table + window functions, instead of Node fetching every row
+// and reducing in JS. This is what lets N concurrent machine requests actually
+// run in parallel (SQL Server can use multiple cores; Node's JS thread can't).
+//
+// Boundary inclusivity in the CASE expressions deliberately mirrors utils.js's
+// bucketOf functions exactly (A: 9<=h<=22, C/holiday_day: 6<=h<=18) — verified
+// byte-identical against the JS routes via differential testing before this
+// was wired into any live route.
+//
+// opts: { floatTable, tagTable, tagIndex, tbf, taf, threshold, pointsPerHour,
+//         query (req.query, for cadence/cap/tolerance/fillGaps overrides) }
+async function runCountQuerySql(pool, opts) {
+  const { floatTable, tagTable, tagIndex, tbf, taf, threshold, pointsPerHour, query } = opts;
+
+  const num = (v, dflt) => (Number(v) > 0 ? Number(v) : dflt);
+  const cadence = num(query.cadence, 10);
+  const capS = num(query.cap, 90);
+  const tolerance = Number(query.tolerance) >= 0 ? Number(query.tolerance) : 0.2;
+  const fillFlag = query.fillGaps !== undefined ? query.fillGaps : query.fillGap;
+  const doFill = String(fillFlag) === 'false' ? 0 : 1;
+
+  const tagQ = await pool.request()
+    .input('tagIndex', tagIndex)
+    .query(`SELECT TagName FROM ${tagTable} WHERE TagIndex = @tagIndex`);
+  const tagExists = tagQ.recordset.length > 0 ? 1 : 0;
+
+  const batch = `
+SELECT DateAndTime, Val, CAST(0 AS BIT) AS Filled,
+       LAG(DateAndTime) OVER (ORDER BY DateAndTime) AS prevTime,
+       LAG(Val)         OVER (ORDER BY DateAndTime) AS prevVal
+INTO #ordered
+FROM ${floatTable}
+WHERE DateAndTime BETWEEN @tbf AND @taf
+  AND TagIndex = @tagIndex
+  AND Status <> 'E'
+  AND @tagExists = 1;
+
+;WITH gaps AS (
+  SELECT prevTime, prevVal, DateAndTime AS curTime, Val AS curVal,
+         DATEDIFF(MILLISECOND, prevTime, DateAndTime) AS gapMs
+  FROM #ordered
+  WHERE Filled = 0 AND prevTime IS NOT NULL
+    AND DATEDIFF(MILLISECOND, prevTime, DateAndTime) > @cadence * 1500
+    AND @doFill = 1
+),
+bridgeable AS (
+  SELECT * FROM gaps
+  WHERE gapMs <= @capS * 1000
+    AND ABS(prevVal - curVal) <= @tolerance * (SELECT MAX(v) FROM (VALUES (ABS(prevVal)),(ABS(curVal)),(0.000001)) AS x(v))
+),
+tally(n) AS (
+  SELECT 1 UNION ALL SELECT n + 1 FROM tally WHERE n < 200
+),
+synthetic AS (
+  SELECT DATEADD(MILLISECOND, CAST(t.n * @cadence * 1000 AS INT), g.prevTime) AS DateAndTime, g.prevVal AS Val
+  FROM bridgeable g JOIN tally t ON t.n * @cadence * 1000 < g.gapMs
+)
+INSERT INTO #ordered (DateAndTime, Val, Filled, prevTime, prevVal)
+SELECT DateAndTime, Val, 1, NULL, NULL FROM synthetic
+OPTION (MAXRECURSION 200);
+
+;WITH gaps AS (
+  SELECT prevTime, prevVal, DateAndTime AS curTime, Val AS curVal,
+         DATEDIFF(MILLISECOND, prevTime, DateAndTime) AS gapMs
+  FROM #ordered
+  WHERE Filled = 0 AND prevTime IS NOT NULL
+    AND DATEDIFF(MILLISECOND, prevTime, DateAndTime) > @cadence * 1500
+    AND @doFill = 1
+)
+SELECT prevTime AS [from], curTime AS [to], gapMs / 1000.0 AS gap_s,
+  CASE WHEN gapMs > @capS * 1000 THEN 'exceeds cap' ELSE 'value mismatch across gap' END AS reason
+FROM gaps
+WHERE NOT (gapMs <= @capS * 1000 AND ABS(prevVal - curVal) <= @tolerance * (SELECT MAX(v) FROM (VALUES (ABS(prevVal)),(ABS(curVal)),(0.000001)) AS x(v)))
+ORDER BY prevTime;
+
+SELECT
+  COUNT(*) AS totalReadings,
+  ISNULL(SUM(CASE WHEN Filled = 1 THEN 1 ELSE 0 END), 0) AS filledReadings
+FROM #ordered;
+
+-- Materialize the holiday list once into an indexed temp table instead of
+-- checking membership via STRING_SPLIT inline per row: profiling showed the
+-- inline form re-evaluates the split/scan per row per referencing SUM (8x),
+-- turning a 400K-row aggregate into ~4s instead of ~0.3s.
+SELECT CONVERT(date, value) AS d INTO #holidaySet FROM STRING_SPLIT(@holidays, ',');
+CREATE UNIQUE CLUSTERED INDEX IX_holidaySet ON #holidaySet(d);
+
+SELECT
+  ISNULL(COUNT(*), 0) AS cnt,
+  ISNULL(SUM(CASE WHEN isHol = 1 AND hourDec >= 6  AND hourDec <= 18 THEN 1 ELSE 0 END), 0) AS holiday_day,
+  ISNULL(SUM(CASE WHEN isHol = 1 AND NOT (hourDec >= 6 AND hourDec <= 18) THEN 1 ELSE 0 END), 0) AS holiday_night,
+  ISNULL(SUM(CASE WHEN isHol = 0 AND hourDec < 6 THEN 1 ELSE 0 END), 0) AS offpeak_ns1,
+  ISNULL(SUM(CASE WHEN isHol = 0 AND hourDec >= 6  AND hourDec < 9  THEN 1 ELSE 0 END), 0) AS offpeak_solar,
+  ISNULL(SUM(CASE WHEN isHol = 0 AND hourDec >= 9  AND hourDec < 18 THEN 1 ELSE 0 END), 0) AS onpeak_solar,
+  ISNULL(SUM(CASE WHEN isHol = 0 AND hourDec >= 18 AND hourDec <= 22 THEN 1 ELSE 0 END), 0) AS onpeak_ns,
+  ISNULL(SUM(CASE WHEN isHol = 0 AND hourDec > 22 THEN 1 ELSE 0 END), 0) AS offpeak_ns2
+FROM (
+  SELECT o.*,
+    CASE WHEN ((DATEDIFF(DAY, '19000107', o.DateAndTime)) % 7) IN (0, 6) OR h.d IS NOT NULL THEN 1 ELSE 0 END AS isHol,
+    DATEPART(HOUR, o.DateAndTime) + DATEPART(MINUTE, o.DateAndTime) / 60.0 + DATEPART(SECOND, o.DateAndTime) / 3600.0 AS hourDec
+  FROM #ordered o
+  LEFT JOIN #holidaySet h ON h.d = CONVERT(date, o.DateAndTime)
+  WHERE o.Val > @threshold
+) c;
+
+DROP TABLE #ordered;
+DROP TABLE #holidaySet;
+`;
+
+  // Explicit sql.Float typing on the numeric params: mssql's automatic type
+  // inference picks sql.Int for whole-number JS Numbers, and @capS/@cadence
+  // get multiplied by 1000 in the query — an oversized ?cap= override (seen
+  // during differential testing) then overflows SQL's int range mid-query.
+  const result = await pool.request()
+    .input('tbf', tbf)
+    .input('taf', taf)
+    .input('tagIndex', tagIndex)
+    .input('tagExists', tagExists)
+    .input('threshold', sql.Float, threshold)
+    .input('cadence', sql.Float, cadence)
+    .input('capS', sql.Float, capS)
+    .input('tolerance', sql.Float, tolerance)
+    .input('doFill', doFill)
+    .input('holidays', HOLIDAYS_CSV)
+    .query(batch);
+
+  const [flaggedRows, countsRows, aggRows] = result.recordsets;
+  const totalReadings = countsRows[0].totalReadings;
+  const filledReadings = countsRows[0].filledReadings;
+  const realReadings = totalReadings - filledReadings;
+  const agg = aggRows[0];
+
+  const tagName = realReadings === 0 ? null : tagQ.recordset[0].TagName;
+  const count = agg.cnt;
+  const hour = count / pointsPerHour;
+  const distHour = {
+    A: (agg.onpeak_solar + agg.onpeak_ns) / pointsPerHour,
+    B: (agg.offpeak_ns1 + agg.offpeak_solar + agg.offpeak_ns2) / pointsPerHour,
+    C: agg.holiday_day / pointsPerHour,
+    D: agg.holiday_night / pointsPerHour,
+    total: count / pointsPerHour,
+  };
+  const distHourFine = {
+    offpeak_ns1: agg.offpeak_ns1 / pointsPerHour,
+    offpeak_solar: agg.offpeak_solar / pointsPerHour,
+    onpeak_solar: agg.onpeak_solar / pointsPerHour,
+    onpeak_ns: agg.onpeak_ns / pointsPerHour,
+    offpeak_ns2: agg.offpeak_ns2 / pointsPerHour,
+    holiday_day: agg.holiday_day / pointsPerHour,
+    holiday_night: agg.holiday_night / pointsPerHour,
+    total: count / pointsPerHour,
+  };
+  const fillGapsMeta = doFill === 1 ? {
+    fillGapsOptions: { cadenceS: cadence, capS, tolerance },
+    realReadings,
+    filledReadings,
+    flaggedGaps: flaggedRows.map(r => ({
+      from: r.from, to: r.to, gap_s: r.gap_s, reason: r.reason,
+    })),
+  } : null;
+
+  // realReadings exposed regardless of doFill so callers (e.g. RMM1's
+  // era-split merge) can tell whether this era/window had any raw rows at
+  // all — needed to skip an era's contribution entirely, matching the old
+  // JS loop's "if (seg.rows.length === 0) continue".
+  return { tagName, count, hour, distHour, distHourFine, fillGapsMeta, realReadings };
+}
 
 pool.on('error', err => {
     console.error('SQL Pool Error:', err);
@@ -218,7 +394,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -341,38 +525,15 @@ router.get('/countBM2', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_BallMill_Log].[dbo].[FloatBallMill]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_BallMill_Log].[dbo].[TagBallMill] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_BallMill_Log].[dbo].[FloatBallMill]',
+      tagTable: '[REPL_BallMill_Log].[dbo].[TagBallMill]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -526,7 +687,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour,distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -649,38 +818,15 @@ router.get('/countCT6_heater', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_Coating_MC6_Heater_Log].[dbo].[FloatCoating_MC6_Heater]',
+      tagTable: '[REPL_Coating_MC6_Heater_Log].[dbo].[TagCoating_MC6_Heater]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -864,7 +1010,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex, tagName: tagName,date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -987,38 +1141,15 @@ router.get('/countCT7_heater', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_Coating_MC7_Log].[dbo].[FloatCoating_MC7]',
+      tagTable: '[REPL_Coating_MC7_Log].[dbo].[TagCoating_MC7]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1141,38 +1272,15 @@ router.get('/countRRM', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_RingRollerMill].[dbo].[FloatTable]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_RingRollerMill].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_RingRollerMill].[dbo].[FloatTable]',
+      tagTable: '[REPL_RingRollerMill].[dbo].[TagTable]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1327,7 +1435,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1483,7 +1599,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1606,38 +1730,15 @@ router.get('/countCSH', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_Crushing_Log].[dbo].[FloatValue]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_Crushing_Log].[dbo].[TagName] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_Crushing_Log].[dbo].[FloatValue]',
+      tagTable: '[REPL_Crushing_Log].[dbo].[TagName]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1791,7 +1892,15 @@ ORDER BY DateAndTime DESC`,
   pointsPerHour,
   returnHours: true,
 });
-    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // Finer TOU split for the Energy Report dashboard's hours table (additive; distHour unchanged).
+    const distHourFine = countValuesHourFine(data, 'Val', ">", thresholdValue, {
+  timeField: 'DateAndTime',
+  clock: 'utc',
+  isHoliday: isHolidayUTC,
+  pointsPerHour,
+  returnHours: true,
+});
+    res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1914,38 +2023,15 @@ router.get('/countHYD', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_Hydraulic_Log].[dbo].[FloatHydraulic]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_Hydraulic_Log].[dbo].[TagHydraulic] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_Hydraulic_Log].[dbo].[FloatHydraulic]',
+      tagTable: '[REPL_Hydraulic_Log].[dbo].[TagHydraulic]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -2071,6 +2157,14 @@ const RMM1_ERAS = [
   { label: { from: RMM1_CADENCE_CHANGE },  pointsPerHour: 240, cadence: '15' },
 ];
 
+// Plant-local naive-datetime string, same "YYYY-MM-DD HH:mm:ss.SSS" format as
+// tbf/taf: RMM1_CADENCE_CHANGE's UTC fields already hold the plant wall-clock
+// value (same "fake Z" convention as everywhere else in this file).
+function formatPlantLocal(d) {
+  const p2 = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, '0')}`;
+}
+
 router.get('/countRMM1', async (req, res) => {
   const {tagIndex,tbf,taf,threshold} = req.query;
   const thresholdValue = Number(threshold);
@@ -2082,64 +2176,77 @@ router.get('/countRMM1', async (req, res) => {
   // route era-splits at RMM1_CADENCE_CHANGE automatically.
   const forced = Number(req.query.pointsPerHour) > 0 || req.query.cadence !== undefined;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_RaymondMill_Log].[dbo].[TagRayMondMill] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Same options as every other count route; pointsPerHour is set per era.
-    const hourOpts = {
-      timeField: 'DateAndTime',
-      // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-      // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-      clock: 'utc',
-      isHoliday: isHolidayUTC,
-      returnHours: true,
-    };
-    const changeMs = new Date(RMM1_CADENCE_CHANGE).getTime();
-    const segments = forced
-      ? [{ ...RMM1_ERAS[1], label: null, pointsPerHour: Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 240, rows: result.recordset }]
-      : RMM1_ERAS.map((era, i) => ({
-          ...era,
-          rows: result.recordset.filter(r => (new Date(r.DateAndTime).getTime() <= changeMs) === (i === 0)),
-        }));
-    let count = 0, hour = 0, distHour = null, fillGapsMeta = null;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    for (const seg of segments) {
-      if (seg.rows.length === 0) continue;
-      // Gap fill is on by default (?fillGaps=false returns the raw count);
-      // each era fills at its own cadence, an explicit &cadence= still wins.
-      const { data, meta } = fillGapsForCount(seg.rows, { cadence: seg.cadence, ...req.query });
-      const segCount = countValues(data, 'Val', '>', thresholdValue);
-      count += segCount;
-      hour += segCount / seg.pointsPerHour;
-      const d = countValuesHour(data, 'Val', ">", thresholdValue, { ...hourOpts, pointsPerHour: seg.pointsPerHour });
-      if (!distHour) distHour = d;
-      else for (const k of Object.keys(d)) distHour[k] += d[k];
-      if (meta) {
+    // Merges one or two era results (SQL-side, via runCountQuerySql) into the
+    // same shape the old JS era-loop produced, including RMM1's distinctive
+    // fillGaps.fillGapsOptions.eras[] wrapper (unlike every other plant's flat
+    // fillGapsOptions — this route always used that shape, forced or not).
+    async function runEra(eraTbf, eraTaf, pointsPerHour, query, label) {
+      const r = await runCountQuerySql(pool, {
+        floatTable: '[REPL_RaymondMill_Log].[dbo].[FloatRayMondMill]',
+        tagTable: '[REPL_RaymondMill_Log].[dbo].[TagRayMondMill]',
+        tagIndex, tbf: eraTbf, taf: eraTaf, threshold: thresholdValue, pointsPerHour, query,
+      });
+      return { ...r, pointsPerHour, label };
+    }
+
+    let eraResults;
+    if (forced) {
+      const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 240;
+      // Same default as the original: forced-pointsPerHour-only still needs a
+      // cadence, and the original fell back to the post-change era's (15s).
+      const query = { ...req.query, cadence: req.query.cadence !== undefined ? req.query.cadence : '15' };
+      eraResults = [await runEra(tbf, taf, pointsPerHour, query, null)];
+    } else {
+      const changeDate = new Date(RMM1_CADENCE_CHANGE);
+      // Legacy SQL DATETIME columns round to ~3.33ms increments (.000/.003/.007),
+      // so a +1ms nudge silently rounds back down to the exact boundary instant
+      // (verified: CAST('...12.001' AS DATETIME) -> '...12.000') and era1's
+      // clamped range would then include the boundary row a second time,
+      // double-counting it. +10ms is safely clear of that rounding and still
+      // utterly negligible next to the ~10-15s cadence, so no real row can
+      // land in the gap between the two eras.
+      const changePlus1 = new Date(changeDate.getTime() + 10);
+      const changeStr = formatPlantLocal(changeDate);
+      const changePlus1Str = formatPlantLocal(changePlus1);
+      const toDate = s => new Date(s.replace(' ', 'T'));
+      // Clamp each era's range to the requested window; a range where
+      // clampedTbf > clampedTaf naturally yields zero rows (same as the old
+      // "if (seg.rows.length === 0) continue" skip, just via an empty BETWEEN).
+      const era0Taf = toDate(taf) <= changeDate ? taf : changeStr;
+      const era1Tbf = toDate(tbf) >= changePlus1 ? tbf : changePlus1Str;
+      eraResults = await Promise.all([
+        runEra(tbf, era0Taf, 360, { ...req.query, cadence: '10' }, { until: RMM1_CADENCE_CHANGE }),
+        runEra(era1Tbf, taf, 240, { ...req.query, cadence: '15' }, { from: RMM1_CADENCE_CHANGE }),
+      ]);
+    }
+
+    let count = 0, hour = 0, distHour = null, distHourFine = null, fillGapsMeta = null, tagName = null;
+    for (const seg of eraResults) {
+      if (seg.tagName !== null) tagName = seg.tagName;
+      count += seg.count;
+      hour += seg.hour;
+      // Accumulation is safe unconditionally (an empty era's numbers are
+      // already all-zero), but the fillGaps.eras[] entry is only added for
+      // eras that actually had raw rows — matching the old JS loop's
+      // "if (seg.rows.length === 0) continue" (an era with zero rows never
+      // appeared in the eras list, and if ALL eras were empty, fillGapsMeta
+      // stayed null / the fillGaps key was omitted entirely).
+      if (!distHour) distHour = { ...seg.distHour };
+      else for (const k of Object.keys(seg.distHour)) distHour[k] += seg.distHour[k];
+      if (!distHourFine) distHourFine = { ...seg.distHourFine };
+      else for (const k of Object.keys(seg.distHourFine)) distHourFine[k] += seg.distHourFine[k];
+      if (seg.realReadings > 0 && seg.fillGapsMeta) {
         if (!fillGapsMeta) fillGapsMeta = {
-          fillGapsOptions: { eras: [], capS: meta.fillGapsOptions.capS, tolerance: meta.fillGapsOptions.tolerance },
+          fillGapsOptions: { eras: [], capS: seg.fillGapsMeta.fillGapsOptions.capS, tolerance: seg.fillGapsMeta.fillGapsOptions.tolerance },
           realReadings: 0, filledReadings: 0, flaggedGaps: [],
         };
-        fillGapsMeta.fillGapsOptions.eras.push({ ...(seg.label || {}), cadenceS: meta.fillGapsOptions.cadenceS, pointsPerHour: seg.pointsPerHour });
-        fillGapsMeta.realReadings += meta.realReadings;
-        fillGapsMeta.filledReadings += meta.filledReadings;
-        fillGapsMeta.flaggedGaps = fillGapsMeta.flaggedGaps.concat(meta.flaggedGaps);
+        fillGapsMeta.fillGapsOptions.eras.push({ ...(seg.label || {}), cadenceS: seg.fillGapsMeta.fillGapsOptions.cadenceS, pointsPerHour: seg.pointsPerHour });
+        fillGapsMeta.realReadings += seg.fillGapsMeta.realReadings;
+        fillGapsMeta.filledReadings += seg.fillGapsMeta.filledReadings;
+        fillGapsMeta.flaggedGaps = fillGapsMeta.flaggedGaps.concat(seg.fillGapsMeta.flaggedGaps);
       }
     }
-    // Empty window: keep the same shape a single-era run would produce.
-    if (!distHour) distHour = countValuesHour([], 'Val', ">", thresholdValue, { ...hourOpts, pointsPerHour: 240 });
-    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, distHourFine: distHourFine, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -2262,38 +2369,15 @@ router.get('/countRMM2', async (req, res) => {
   // Not meaningful for on-change loggers with no fixed cadence (LC_CSH).
   const pointsPerHour = Number(req.query.pointsPerHour) > 0 ? Number(req.query.pointsPerHour) : 360;
   try {
-    // Trimmed fetch: the counting pipeline only reads DateAndTime/Val, so
-    // the per-row TagName join was pure transfer cost.
-    const [result, tagQ] = await Promise.all([
-      pool.request().query`
-  SELECT DateAndTime, Val
-FROM [REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]
-WHERE DateAndTime between ${tbf} and ${taf}
-and TagIndex = ${tagIndex}
-and Status <> 'E'
-ORDER BY DateAndTime DESC`,
-      pool.request().query`SELECT TagName FROM [REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2] WHERE TagIndex = ${tagIndex}`,
-    ]);
-    // The old query INNER JOINed the tag table: unknown tag -> no rows
-    // (count 0, tagName null), reproduced here.
-    if (tagQ.recordset.length === 0) result.recordset = [];
-    // Gap fill is on by default: short Kepware logging blips are bridged before
-    // counting so run-hours aren't undercounted. ?fillGaps=false returns the
-    // legacy raw count (meta null, output identical to production).
-    const { data, meta: fillGapsMeta } = fillGapsForCount(result.recordset, req.query);
-    const count = countValues(data, 'Val', '>', thresholdValue);
-    const hour = count/pointsPerHour;
-    const tagName = (result.recordset.length === 0 ? null : tagQ.recordset[0].TagName);
-    const distHour = countValuesHour(data, 'Val', ">", thresholdValue, {
-  timeField: 'DateAndTime',
-  // DB stores naive Bangkok-local timestamps; the driver parses them as UTC,
-  // so clock:'utc' reads plant-local time regardless of the server's OS timezone.
-  clock: 'utc',
-  isHoliday: isHolidayUTC,
-  pointsPerHour,
-  returnHours: true,
-});
-    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: count, hour: hour, distHour: distHour, ...(fillGapsMeta ? { fillGaps: fillGapsMeta } : {})});
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    const r = await runCountQuerySql(pool, {
+      floatTable: '[REPL_RaymondMill2_Log].[dbo].[FloatRaymondMill2]',
+      tagTable: '[REPL_RaymondMill2_Log].[dbo].[TagRaymondMill2]',
+      tagIndex, tbf, taf, threshold: thresholdValue, pointsPerHour, query: req.query,
+    });
+    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');

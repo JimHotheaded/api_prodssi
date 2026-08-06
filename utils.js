@@ -204,6 +204,118 @@ function countValuesHour(data, field, operator, value, options = {}) {
   };
 }
 
+/**
+ * Same purpose as countValuesHour, but splits into the finer TOU periods
+ * used by the Energy Report dashboard's client-side classifyPeriod, instead
+ * of the coarse A/B/C/D buckets:
+ *  - Non-holiday (weekday): offpeak_ns1 0-6, offpeak_solar 6-9,
+ *    onpeak_solar 9-18, onpeak_ns 18-22, offpeak_ns2 22-24
+ *  - Holiday/weekend: holiday_night 0-6, holiday_day 6-18, holiday_night 18-24
+ *
+ * Purely additive sibling of countValuesHour — same options shape, same
+ * cadence/timezone handling — so existing callers/response fields are
+ * untouched; callers add this as a second, separate field.
+ */
+function countValuesHourFine(data, field, operator, value, options = {}) {
+  const ZERO = {
+    offpeak_ns1: 0, offpeak_solar: 0, onpeak_solar: 0, onpeak_ns: 0, offpeak_ns2: 0,
+    holiday_day: 0, holiday_night: 0, total: 0,
+  };
+  if (!data || data.length === 0) return ZERO;
+
+  const {
+    timeField = "timestamp",
+    isHoliday = () => false,
+    pointsPerHour = 360,
+    returnHours = true,
+    tzOffsetMinutes = 0,
+    clock = "local",
+  } = options;
+
+  const compare = (a, op, b) => {
+    switch (op) {
+      case ">": return a > b;
+      case "<": return a < b;
+      case ">=": return a >= b;
+      case "<=": return a <= b;
+      case "==": return a == b;
+      case "===": return a === b;
+      case "!=": return a != b;
+      case "!==": return a !== b;
+      default: throw new Error(`Unknown operator: ${op}`);
+    }
+  };
+
+  const toDate = (t) => {
+    let d;
+    if (t instanceof Date) {
+      d = new Date(t.getTime());
+    } else if (typeof t === "number") {
+      d = new Date(t);
+    } else if (typeof t === "string") {
+      const hasTZ =
+        /Z$/.test(t) || /[+-]\d{2}:\d{2}$/.test(t) || /[+-]\d{4}$/.test(t);
+      d = hasTZ ? new Date(t) : new Date(t.replace(" ", "T"));
+    } else {
+      throw new Error(`Unsupported time value in "${timeField}": ${t}`);
+    }
+
+    if (Number.isNaN(d.getTime())) {
+      throw new Error(`Invalid date/time in field "${timeField}": ${t}`);
+    }
+
+    if (tzOffsetMinutes !== 0) {
+      d = new Date(d.getTime() + tzOffsetMinutes * 60 * 1000);
+    }
+
+    return d;
+  };
+
+  const hourOfDay = clock === "utc"
+    ? (d) => d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600
+    : (d) => d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+
+  // Boundary inclusivity deliberately mirrors countValuesHour's bucketOf
+  // (A: 9<=h<=22, C: 6<=h<=18, both inclusive at the upper bound) so that
+  // onpeak_solar+onpeak_ns always sums to exactly A and holiday_day always
+  // equals exactly C, sample-for-sample, with no double count or gap at the
+  // exact-hour boundary. Where the fine split lands an exact-hour sample
+  // (e.g. h===18 for non-holiday, h===22) is this function's own choice —
+  // production has no precedent for it since the coarse buckets never split there.
+  const bucketOf = (d, item) => {
+    const h = hourOfDay(d);
+    if (isHoliday(d, item)) {
+      return (h >= 6 && h <= 18) ? "holiday_day" : "holiday_night";
+    }
+    if (h < 6) return "offpeak_ns1";
+    if (h < 9) return "offpeak_solar";
+    if (h < 18) return "onpeak_solar";
+    if (h <= 22) return "onpeak_ns";
+    return "offpeak_ns2";
+  };
+
+  const counts = data.reduce(
+    (acc, item) => {
+      if (!compare(item[field], operator, value)) return acc;
+      const d = toDate(item[timeField]);
+      const bucket = bucketOf(d, item);
+      acc[bucket] += 1;
+      acc.total += 1;
+      return acc;
+    },
+    { ...ZERO }
+  );
+
+  if (!returnHours) return counts;
+
+  const hours = { total: counts.total / pointsPerHour };
+  for (const k of Object.keys(ZERO)) {
+    if (k === "total") continue;
+    hours[k] = counts[k] / pointsPerHour;
+  }
+  return hours;
+}
+
 /* -------------------- Holiday helper (dates + weekends) -------------------- */
 const holidaySet = new Set(holidays);
 
@@ -320,13 +432,15 @@ function runFillGaps(data, query = {}) {
 }
 
 module.exports = {  findMax,
-                      findMin, 
-                      calculateAverage, 
-                      returnTagName, 
+                      findMin,
+                      calculateAverage,
+                      returnTagName,
                       countValues,
+                      holidays,
                       calSum,
                       calCap,
                       countValuesHour,
+                      countValuesHourFine,
                       isHoliday,
                       isHolidayUTC,
                       fillGaps,
