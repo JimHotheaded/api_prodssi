@@ -27,7 +27,9 @@ const TAG_DISPLAY = {
     6:  { name: 'M205_Host_Temp',           divisor: 10 },
     7:  { name: 'M208_Feeder_Current',      divisor: 100 },
     8:  { name: 'M208_Feeder_ReadFreq',     divisor: 10 },
-    9:  { name: 'V204_Damper_Out_QW',       divisor: 10 },
+    // Raw Siemens analog output word (QW), not a scaled measurement — passed
+    // through unconverted. The damper's engineering value is tag 10.
+    9:  { name: 'V204_Damper_Out_QW',       divisor: 1 },
     10: { name: 'V204_Damper%',             divisor: 10 },
   },
 };
