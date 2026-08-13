@@ -40,6 +40,17 @@ long as the historian retains that data.
   `&pointsPerHour=`/`&cadence=` force path, `&fillGaps=false`, the
   excluded machines, and the window routes' default fill cadence.
 
+- `test-ofil.js` — the OFIL plant (`REPL_OFIL_LOG`, added 2026-08-13).
+  **Needs neither a candidate server nor production**: it starts the app
+  in-process and checks against the historian directly. Covers the display
+  layer (friendly names, Val ÷100 to Hz, `&threshold=` in Hz, per-row
+  conversion on `/all`), the single-era 15s `CADENCE_ERAS` entry (a full hour
+  reads 1.0 h, divides by 240), `&fillGaps=false` / `&pointsPerHour=360` /
+  `&cadence=` overrides, and the usual edge cases (missing threshold, unknown
+  tag, window predating the database). OFIL is deliberately **not** in the
+  other scripts' plant lists — they diff against production on :3334, which
+  404s on OFIL until it runs this code.
+
 Logging cadence changed 10s → 15s for the whole plant on 2026-08-06
 (each machine between 11:27:15 and 11:31:28), and for RMM1 a month
 earlier on 2026-07-09 09:18:12. Count routes era-split at those instants

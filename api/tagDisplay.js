@@ -10,7 +10,8 @@
  * Keyed by plant so another machine can be added later without touching the
  * routes. **Adding a plant here changes that plant's wire format** (TagName and
  * Val), so treat it like any other downstream-visible change. Plants absent
- * from the table pass through untouched, which is every plant but RRM today.
+ * from the table pass through untouched, which is every plant but RRM and OFIL
+ * today.
  *
  * Scaling divides without rounding — precision is preserved and the values stay
  * exactly raw/divisor (137 -> 1.37, an average of 142.65 -> 1.4265).
@@ -31,6 +32,17 @@ const TAG_DISPLAY = {
     // through unconverted. The damper's engineering value is tag 10.
     9:  { name: 'V204_Damper_Out_QW',       divisor: 1 },
     10: { name: 'V204_Damper%',             divisor: 10 },
+  },
+  // OFIL drive output frequencies. The tag table holds the raw Logix paths
+  // ("::[PLC_Ofil]OFIL_SILO4:I.OutputFreq") and the drives publish OutputFreq
+  // in hundredths of a Hz (a 30.00 Hz setpoint is stored as 3000), so every tag
+  // here divides by 100.
+  OFIL: {
+    0: { name: 'SILO4_OutputFreq',          divisor: 100 },
+    1: { name: 'Rotary_Screen2_OutputFreq', divisor: 100 },
+    2: { name: 'Rotary_Screen3_OutputFreq', divisor: 100 },
+    3: { name: 'Rotary_Screen4_OutputFreq', divisor: 100 },
+    4: { name: 'Rotary_Screen5_OutputFreq', divisor: 100 },
   },
 };
 

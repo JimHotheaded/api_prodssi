@@ -206,6 +206,10 @@ corrupts every historical query. Machines absent from this table have no cadence
 history to split: Hour_OFIL logs at 60s (callers pass &pointsPerHour=60), LC_CSH
 logs on change with no fixed cadence, and WL is event data.
 
+A machine that has only ever logged at one interval still belongs here, as a
+single boundary-less era — the fallback for an absent machine is 10s/360, which
+would report two thirds of the real run-hours for anything logging at 15s.
+
 The 2026-08-06 entries are the plant-wide 10s -> 15s change; RMM1 changed
 earlier, on 2026-07-09, when it was switched over on its own as a test.
 Timestamps use the same plant-local "fake Z" wire convention as the rest of
@@ -232,6 +236,10 @@ const CADENCE_ERAS = (() => {
   ];
   const table = { RMM1: tenToFifteen('2026-07-09T09:18:12.000Z') };
   for (const [plant, at] of Object.entries(CHANGE_2026_08_06)) table[plant] = tenToFifteen(at);
+  // OFIL_LOG only started logging on 2026-08-11, after the plant-wide switch,
+  // so it has never run at anything but 15s: one era, no boundary. Listing it
+  // is still required — an absent machine falls back to 10s/360.
+  table.OFIL = [{ pointsPerHour: 240, cadence: '15' }];
   return table;
 })();
 
@@ -434,10 +442,10 @@ poolConnect
 router.get('/', async (req, res) => {
   try {
     // One round-trip per plant, all in flight at once — sequential awaits made
-    // this listing pay 15 network round-trips back to back.
+    // this listing pay 16 network round-trips back to back.
     const [tagBM2_con, tagBM2, tagCT6_con, tagCT6_heater, tagCT7_con, tagCT7_heater,
            tagCSH, tagFeedRaw, tagHYD, tagRMM1, tagRMM2, tagWL, tagRRM, tagLC_CSH,
-           tagHour_OFIL] = await Promise.all([
+           tagHour_OFIL, tagOFIL] = await Promise.all([
       pool.request().query`SELECT TagBallMill_Conveyor.TagName, TagBallMill_Conveyor.TagIndex FROM [REPL_BallMill_Conveyor_LOG].[dbo].[TagBallMill_Conveyor]`,
       pool.request().query`SELECT TagBallMill.TagName, TagBallMill.TagIndex FROM [REPL_BallMill_Log].[dbo].[TagBallMill]`,
       pool.request().query`SELECT TagCoating_MC6_Con.TagName, TagCoating_MC6_Con.TagIndex FROM [REPL_Coating_MC6_Conveyor_LOG].[dbo].[TagCoating_MC6_Con]`,
@@ -453,6 +461,7 @@ router.get('/', async (req, res) => {
       pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_RingRollerMill].[dbo].[TagTable]`,
       pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_LC_CSH].[dbo].[TagTable]`,
       pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_Hour_OFIL].[dbo].[TagTable]`,
+      pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_OFIL_LOG].[dbo].[TagTable]`,
     ]);
 
     res.json([
@@ -460,6 +469,7 @@ router.get('/', async (req, res) => {
                         "example : http://172.30.1.112:3334/plants/BM2/1/2024-07-01%2000:00:00.000/2024-07-31%2000:00:00.000/avg",
                         "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
       {"note_RRM":"RRM tags are returned with friendly names (M208_Feeder_Current, ...) and values converted to engineering units (raw historian integers /10, feeder current /100). countRRM's &threshold= is in those same converted units. The historian itself is unchanged."},
+      {"note_OFIL":"OFIL tags are returned with friendly names (SILO4_OutputFreq, Rotary_Screen2_OutputFreq, ...) and values converted to Hz (the drives log OutputFreq in hundredths of a Hz, so raw /100: 2900 => 29). countOFIL's &threshold= is in Hz. The historian itself is unchanged. Not to be confused with Hour_OFIL, a separate database of cumulative hour counters."},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
                         "/{plant}/all   ==query top 1000 in database",
@@ -480,7 +490,8 @@ router.get('/', async (req, res) => {
       {"WL_Weight":"Wheel Loader Weight","tags ([0]=id [1]=WL_no. [2]=Load [3]=Gross Weight)":tagWL.recordset},
       {"RRM":"RingRollerMill","tags":presentTagList('RRM', tagRRM.recordset)},
       {"LC_CSH":"Loadcell Crushing","tags":tagLC_CSH.recordset},
-      {"Hour_OFIL":"Hour OFIL","tags":tagHour_OFIL.recordset}
+      {"Hour_OFIL":"Hour OFIL","tags":tagHour_OFIL.recordset},
+      {"OFIL":"OFIL Silo/Rotary Screens (drive output frequency, Hz)","tags":presentTagList('OFIL', tagOFIL.recordset)}
     ]);
   } catch (err) {
     console.error('Database query error:', err);
@@ -2467,6 +2478,152 @@ router.get('/countRMM2', async (req, res) => {
       tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
     });
     res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+/////////////////////////////////////////////////
+
+// OFIL (REPL_OFIL_LOG): the silo feeder and rotary-screen drives. Served
+// through the display layer like RRM — the tag table holds raw Logix paths and
+// the drives log OutputFreq in hundredths of a Hz. Unrelated to Hour_OFIL,
+// which is a separate database of cumulative hour counters.
+router.get('/OFIL', async (req, res) => {
+  try {
+    const result = await pool.request().query`SELECT TagTable.TagName, TagTable.TagIndex FROM [REPL_OFIL_LOG].[dbo].[TagTable]`;
+    res.json(presentTagList('OFIL', result.recordset));
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/OFIL/all', async (req, res) => {
+  try {
+    const result = await pool.request().query`
+  SELECT TOP (1000) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_OFIL_LOG].[dbo].[FloatTable]
+INNER JOIN REPL_OFIL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+WHERE FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(presentRows('OFIL', result.recordset));
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/OFIL/:tagIndex', async (req, res) => {
+  const {tagIndex} = req.params;
+  try {
+    const result = await pool.request().query`
+  SELECT TOP (1) FloatTable.DateAndTime,FloatTable.Val,FloatTable.TagIndex ,TagTable.TagName
+FROM [REPL_OFIL_LOG].[dbo].[FloatTable]
+INNER JOIN REPL_OFIL_LOG.dbo.TagTable ON FloatTable.TagIndex = TagTable.TagIndex
+and FloatTable.TagIndex = ${tagIndex}
+and FloatTable.Status <> 'E'
+ORDER BY DateAndTime DESC`;
+    res.json(presentRows('OFIL', result.recordset));
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+//tbf=time before, taf=time after
+router.get('/OFIL/:tagIndex/:tbf/:taf', async (req, res) => {
+    const {tagIndex,tbf,taf} = req.params;
+    try {
+      // Trimmed fetch: TagIndex/TagName are constant for the queried tag and
+      // re-added in JS below — shipping them per row (nvarchar join per
+      // row) dominated this route's latency.
+      const [result, tagQ] = await Promise.all([
+        pool.request().query`
+  SELECT DateAndTime, Val
+FROM [REPL_OFIL_LOG].[dbo].[FloatTable]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'
+ORDER BY DateAndTime DESC`,
+        pool.request().query`SELECT TagIndex, TagName FROM [REPL_OFIL_LOG].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+      ]);
+      const tagRow = tagQ.recordset[0];
+      // The old query INNER JOINed the tag table: unknown tag -> no rows.
+      result.recordset = tagRow === undefined ? [] : result.recordset.map(r => ({
+        DateAndTime: r.DateAndTime, Val: r.Val,
+        TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
+      }));
+      // Rename/scale AFTER the fill so gap detection still sees raw values and
+      // the synthetic rows it adds are converted along with the real ones.
+      res.json(presentWindow('OFIL',
+        applyFillGaps(result.recordset, { cadence: defaultCadenceFor('OFIL', taf), ...req.query })));
+    } catch (err) {
+      console.error('Database query error:', err);
+      res.status(500).send('Server error');
+    }
+  });
+
+router.get('/OFIL/:tagIndex/:tbf/:taf/avg', async (req, res) => {
+  const {tagIndex,tbf,taf} = req.params;
+  try {
+    // Aggregate in SQL instead of fetching every row: the old query shipped
+    // the whole window (with a per-row TagName join) to compute three
+    // scalars in JS. avg can differ from the old JS sum in the last
+    // decimals (float summation order); max/min are identical.
+    const [agg, tag] = await Promise.all([
+      pool.request().query`
+  SELECT MIN(Val) AS minVal, MAX(Val) AS maxVal, AVG(Val) AS avgVal, COUNT(*) AS n
+FROM [REPL_OFIL_LOG].[dbo].[FloatTable]
+WHERE DateAndTime between ${tbf} and ${taf}
+and TagIndex = ${tagIndex}
+and Status <> 'E'`,
+      pool.request().query`SELECT TagName FROM [REPL_OFIL_LOG].[dbo].[TagTable] WHERE TagIndex = ${tagIndex}`,
+    ]);
+  const a = agg.recordset[0];
+  // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
+  // nulls from the JS helpers; reproduce that exactly.
+  const ok = a.n > 0 && tag.recordset.length > 0;
+  const tagName = ok ? displayName('OFIL', tagIndex, tag.recordset[0].TagName) : null;
+  const maxVal = ok ? scaleValue('OFIL', tagIndex, a.maxVal) : null;
+  const minVal = ok ? scaleValue('OFIL', tagIndex, a.minVal) : null;
+  const avgVal = ok ? scaleValue('OFIL', tagIndex, a.avgVal) : null;
+  res.json({tagIndex: tagIndex,tagName:tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
+  } catch (err) {
+    console.error('Database query error:', err);
+    res.status(500).send('Server error');
+  }
+});
+
+router.get('/countOFIL', async (req, res) => {
+  const {tagIndex,tbf,taf,threshold} = req.query;
+  const thresholdValue = Number(threshold);
+  if (threshold === undefined || threshold === '' || Number.isNaN(thresholdValue)) {
+    return res.status(400).json({error: "threshold query parameter is required and must be a number, e.g. &threshold=1"});
+  }
+  try {
+    // SQL-side pipeline (gap-fill + counting + TOU-bucketing) — see
+    // runCountQuerySql for why this replaced the old fetch-all-rows-into-JS
+    // approach (CPU-bound single-thread contention under concurrent load).
+    // Samples per hour comes from the tag's logging cadence at the time each
+    // row was logged (CADENCE_ERAS); &pointsPerHour= / &cadence= still force
+    // one cadence over the whole window.
+    // OFIL values are reported in Hz, so &threshold= is too: scale it back up
+    // to the raw stored hundredths before comparing. count/hour and the TOU
+    // buckets are sample counts, unaffected by the conversion.
+    const r = await runCountEras(pool, {
+      plant: 'OFIL',
+      floatTable: '[REPL_OFIL_LOG].[dbo].[FloatTable]',
+      tagTable: '[REPL_OFIL_LOG].[dbo].[TagTable]',
+      tagIndex, tbf, taf,
+      threshold: thresholdValue * divisorFor('OFIL', tagIndex),
+      query: req.query,
+    });
+    // null tagName means "no rows in this window" and must stay null — don't
+    // let the display map turn an empty window into a named one.
+    const tagName = r.tagName === null ? null : displayName('OFIL', tagIndex, r.tagName);
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
