@@ -10,8 +10,8 @@
  * Keyed by plant so another machine can be added later without touching the
  * routes. **Adding a plant here changes that plant's wire format** (TagName and
  * Val), so treat it like any other downstream-visible change. Plants absent
- * from the table pass through untouched, which is every plant but RRM and OFIL
- * today.
+ * from the table pass through untouched, which is every plant but RRM, OFIL and
+ * Silo today.
  *
  * Scaling divides without rounding — precision is preserved and the values stay
  * exactly raw/divisor (137 -> 1.37, an average of 142.65 -> 1.4265).
@@ -43,6 +43,49 @@ const TAG_DISPLAY = {
     2: { name: 'Rotary_Screen3_OutputFreq', divisor: 100 },
     3: { name: 'Rotary_Screen4_OutputFreq', divisor: 100 },
     4: { name: 'Rotary_Screen5_OutputFreq', divisor: 100 },
+  },
+  // Silo levels and weights, gathered from four PLCs into one database. This is
+  // a RENAME-ONLY block — every divisor is 1, because these tags are already
+  // logged as real floats in engineering units. It exists because the raw
+  // historian names are actively misleading about which silo they describe:
+  // "RaymondMill\Weight_Silo3" is silo 41, "Coating7_Con\Net_Weight" is silo 1,
+  // and TONSILOCSH[0..3] are silos 1..4 (offset by one). Names supplied by the
+  // plant 2026-08-14; the DB is untouched.
+  //
+  // NOTE the units are mixed and are NOT harmonised here: SILO1/3/43/44_WEIGHT
+  // read in the tens of thousands (kg) while every other *_WEIGHT reads in the
+  // tens or low hundreds (tonnes). Adding divisors is a separate, deliberate
+  // decision — don't infer one from the shared "_WEIGHT" suffix.
+  Silo: {
+    0:  { name: 'SILO31_LEVEL',    divisor: 1 },
+    1:  { name: 'SILO31_WEIGHT',   divisor: 1 },
+    2:  { name: 'SILO32_LEVEL',    divisor: 1 },
+    3:  { name: 'SILO32_WEIGHT',   divisor: 1 },
+    4:  { name: 'SILO33_LEVEL',    divisor: 1 },
+    5:  { name: 'SILO33_WEIGHT',   divisor: 1 },
+    6:  { name: 'SILO34_LEVEL',    divisor: 1 },
+    7:  { name: 'SILO34_WEIGHT',   divisor: 1 },
+    8:  { name: 'SILO35_LEVEL',    divisor: 1 },
+    9:  { name: 'SILO35_WEIGHT',   divisor: 1 },
+    10: { name: 'SILO36_LEVEL',    divisor: 1 },
+    11: { name: 'SILO36_WEIGHT',   divisor: 1 },
+    // Per-minute production delta, not a stock level — negative means drawdown.
+    12: { name: 'CAP_SILO3_1_min', divisor: 1 },
+    13: { name: 'SILO9_WEIGHT',    divisor: 1 },
+    14: { name: 'SILO10_WEIGHT',   divisor: 1 },
+    15: { name: 'SILO9_LEVEL',     divisor: 1 },
+    16: { name: 'SILO10_LEVEL',    divisor: 1 },
+    17: { name: 'SILO0CSH_WEIGHT', divisor: 1 },
+    18: { name: 'SILO1CSH_WEIGHT', divisor: 1 },
+    19: { name: 'SILO2CSH_WEIGHT', divisor: 1 },
+    20: { name: 'SILO3CSH_WEIGHT', divisor: 1 },
+    21: { name: 'SILO4CSH_WEIGHT', divisor: 1 },
+    22: { name: 'SILO43_WEIGHT',   divisor: 1 },
+    23: { name: 'SILO44_WEIGHT',   divisor: 1 },
+    24: { name: 'SILO1_WEIGHT',    divisor: 1 },
+    25: { name: 'SILO3_WEIGHT',    divisor: 1 },
+    26: { name: 'SILO41_WEIGHT',   divisor: 1 },
+    27: { name: 'SILO42_WEIGHT',   divisor: 1 },
   },
 };
 

@@ -51,6 +51,17 @@ long as the historian retains that data.
   other scripts' plant lists — they diff against production on :3334, which
   404s on OFIL until it runs this code.
 
+- `test-silo.js` — the Silo plant (`REPL_Silo_LOG`, added 2026-08-14).
+  **Needs neither a candidate server nor production**, same in-process pattern
+  as `test-ofil.js`. Covers the 60s single-era `CADENCE_ERAS` entry (a full
+  hour reads 1.0 h, divides by 60 — the 360 fallback would read 0.1667), the
+  `&fillGaps=false` / `&pointsPerHour=` / `&cadence=` overrides, and the usual
+  edge cases. It also pins the rename-only display layer: all 28 plant names
+  asserted verbatim, no raw historian fragment (`SiemensOPC`, `PLC_Ofil`,
+  `Coating7_Con`, …) anywhere on the wire, and values byte-identical to the
+  historian (divisor 1 everywhere). Same :3334 caveat as OFIL — deliberately
+  not in the other scripts' plant lists.
+
 Logging cadence changed 10s → 15s for the whole plant on 2026-08-06
 (each machine between 11:27:15 and 11:31:28), and for RMM1 a month
 earlier on 2026-07-09 09:18:12. Count routes era-split at those instants
