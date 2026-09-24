@@ -62,6 +62,29 @@ long as the historian retains that data.
   historian (divisor 1 everywhere). Same :3334 caveat as OFIL — deliberately
   not in the other scripts' plant lists.
 
+- `test-csh-display.js` — the CSH display layer (added 2026-09-01).
+  **Needs neither a candidate server nor production**, same in-process pattern
+  as `test-silo.js`. CSH is the first *partial* entry in `api/tagDisplay.js`:
+  only tags 8 (`Grizzly_Hz`) and 19 (`Screen_Hz`) — ÷100 to Hz — and 20
+  (`Hopper_level`, rename-only) are mapped. The script pins both halves: the
+  three mapped tags are renamed and converted on every route (tag list, `/all`,
+  latest, window including gap-filled synthetic rows, `/avg`, `countCSH`), and
+  a sample of **unmapped** tags stays byte-identical to a direct SQL read in
+  both name and value — a regression that scaled the whole plant would pass the
+  first half and fail the second. Also checks `countCSH&threshold=` is in Hz for
+  tag 19 (30 counts what raw 3000 counts), that the 15s era still reads 1.0 h
+  from 240 samples, and the usual edge cases.
+
+Note: adding CSH to the display layer makes **`test-plants-perf-diff.js` report
+one diff** — `byteEqual('/plants/')`, because the root listing now carries the
+renamed CSH tags. Its per-plant window/avg/count checks use `tags[0].TagIndex`
+= 0 for CSH, which is unmapped and therefore unaffected. The diff disappears
+once :3334 runs this code. `test-prod-diff.js`, `test-24h-diff.js` and
+`test-count-default-flip.js` all use tagIndex 0 for CSH and are unaffected.
+`test-full-endpoint-diff.js` *is* affected (it hits the CSH tag list, `/all` and
+the last tag's latest value) and handles it through the shared display
+transform, which is now driven by `DISPLAY_PLANTS = ['RRM','CSH']`.
+
 Logging cadence changed 10s → 15s for the whole plant on 2026-08-06
 (each machine between 11:27:15 and 11:31:28), and for RMM1 a month
 earlier on 2026-07-09 09:18:12. Count routes era-split at those instants

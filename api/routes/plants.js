@@ -477,6 +477,7 @@ router.get('/', async (req, res) => {
                         "example : http://172.30.1.112:3334/plants/countRMM2?tagIndex=5&tbf=2024-08-01%2000:00:00.000&taf=2024-08-02%2000:00:00.000&threshold=1"]},
       {"note_RRM":"RRM tags are returned with friendly names (M208_Feeder_Current, ...) and values converted to engineering units (raw historian integers /10, feeder current /100). countRRM's &threshold= is in those same converted units. The historian itself is unchanged."},
       {"note_OFIL":"OFIL tags are returned with friendly names (SILO4_OutputFreq, Rotary_Screen2_OutputFreq, ...) and values converted to Hz (the drives log OutputFreq in hundredths of a Hz, so raw /100: 2900 => 29). countOFIL's &threshold= is in Hz. The historian itself is unchanged. Not to be confused with Hour_OFIL, a separate database of cumulative hour counters."},
+      {"note_CSH":"CSH is PARTIALLY converted: only tags 8, 19 and 20 are renamed (Grizzly_Hz, Screen_Hz, Hopper_level). Tags 8 and 19 are drive output frequencies logged in hundredths of a Hz, so their values are divided by 100 (3300 => 33) and countCSH's &threshold= is in Hz for those two tags only. Tag 20 is renamed but NOT converted. Every other CSH tag keeps its raw historian name and raw value. NOTE tag 8 was served raw until 2026-09-01 - anything that divided it by 100 downstream must stop. The historian itself is unchanged."},
       {"note_Silo":"Silo tags are returned with the plant's own silo names (SILO31_LEVEL, SILO1CSH_WEIGHT, ...) instead of the raw historian names, which misidentify the silo (RaymondMill\\Weight_Silo3 is silo 41; Coating7_Con\\Net_Weight is silo 1; TONSILOCSH[0..3] are silos 1..4). Values are NOT converted — countSilo's &threshold= is in each tag's own units, and note those units are mixed: SILO1/3/43/44_WEIGHT are in the tens of thousands (kg) while the other *_WEIGHT tags read in tonnes. The historian itself is unchanged."},
       {"function_list":["/{plant}   ==get all tagIndex",
                         "/{plant}/{tag_id}    ==get lastest tagIndex data",
@@ -490,7 +491,7 @@ router.get('/', async (req, res) => {
       {"CT6_heater":"Coating6 Heater","tags":tagCT6_heater.recordset},
       {"CT7_con":"Coating7 Conveyor","tags":tagCT7_con.recordset},
       {"CT7_heater":"Coating7 Heater","tags":tagCT7_heater.recordset},
-      {"CSH":"Crushing","tags":tagCSH.recordset},
+      {"CSH":"Crushing","tags":presentTagList('CSH', tagCSH.recordset)},
       {"FeedRaw":"FeedRaw Material VM/BM1/BM2","tags":tagFeedRaw.recordset},
       {"HYD":"Hydraulics Vertical Roller Mill","tags":tagHYD.recordset},
       {"RMM1":"Raymond Mill1","tags":tagRMM1.recordset},
@@ -1831,10 +1832,14 @@ ORDER BY DateAndTime DESC`,
 
 /////////////////////////////////////////////////
 
+// CSH is served through the display layer (api/tagDisplay.js), but only for
+// three of its tags: 8/19 are drive OutputFreq in hundredths of a Hz (renamed
+// and /100), 20 is a loadcell real (renamed only). Every other CSH tag is
+// absent from the map and passes through with its raw name and raw value.
 router.get('/CSH', async (req, res) => {
   try {
     const result = await pool.request().query`SELECT TagName.TagName, TagName.TagIndex FROM [REPL_Crushing_Log].[dbo].[TagName]`;
-    res.json(result.recordset);
+    res.json(presentTagList('CSH', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1849,7 +1854,9 @@ FROM [REPL_Crushing_Log].[dbo].[FloatValue]
 INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagIndex
 WHERE FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    res.json(result.recordset);
+    // Every tag interleaved: presentRows converts each row against its OWN
+    // TagIndex, so mapped and unmapped tags coexist in one response.
+    res.json(presentRows('CSH', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1866,7 +1873,7 @@ INNER JOIN REPL_Crushing_Log.dbo.TagName ON FloatValue.TagIndex = TagName.TagInd
 and FloatValue.TagIndex = ${tagIndex}
 and FloatValue.Status <> 'E'
 ORDER BY DateAndTime DESC`;
-    res.json(result.recordset);
+    res.json(presentRows('CSH', result.recordset));
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');
@@ -1896,7 +1903,10 @@ ORDER BY DateAndTime DESC`,
         DateAndTime: r.DateAndTime, Val: r.Val,
         TagIndex: tagRow.TagIndex, TagName: tagRow.TagName,
       }));
-      res.json(applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CSH', taf), ...req.query }));
+      // Convert AFTER the fill so gap detection still runs on raw values and
+      // the synthetic rows it produces are converted along with the real ones.
+      res.json(presentWindow('CSH',
+        applyFillGaps(result.recordset, { cadence: defaultCadenceFor('CSH', taf), ...req.query })));
     } catch (err) {
       console.error('Database query error:', err);
       res.status(500).send('Server error');
@@ -1923,10 +1933,10 @@ and Status <> 'E'`,
   // Empty window or unknown tag (the old INNER JOIN -> no rows) returned
   // nulls from the JS helpers; reproduce that exactly.
   const ok = a.n > 0 && tag.recordset.length > 0;
-  const tagName = ok ? tag.recordset[0].TagName : null;
-  const maxVal = ok ? a.maxVal : null;
-  const minVal = ok ? a.minVal : null;
-  const avgVal = ok ? a.avgVal : null;
+  const tagName = ok ? displayName('CSH', tagIndex, tag.recordset[0].TagName) : null;
+  const maxVal = ok ? scaleValue('CSH', tagIndex, a.maxVal) : null;
+  const minVal = ok ? scaleValue('CSH', tagIndex, a.minVal) : null;
+  const avgVal = ok ? scaleValue('CSH', tagIndex, a.avgVal) : null;
   res.json({tagIndex: tagIndex,tagName: tagName, date_before:tbf, date_after:taf, max: maxVal, min: minVal, avg: avgVal});
   } catch (err) {
     console.error('Database query error:', err);
@@ -1951,9 +1961,16 @@ router.get('/countCSH', async (req, res) => {
       plant: 'CSH',
       floatTable: '[REPL_Crushing_Log].[dbo].[FloatValue]',
       tagTable: '[REPL_Crushing_Log].[dbo].[TagName]',
-      tagIndex, tbf, taf, threshold: thresholdValue, query: req.query,
+      tagIndex, tbf, taf,
+      // &threshold= is in the converted units, so it is multiplied back up
+      // before the SQL comparison: on tags 8/19 it means Hz (&threshold=5 =>
+      // 5.00 Hz => raw 500). Divisor 1 on every other tag leaves it untouched.
+      threshold: thresholdValue * divisorFor('CSH', tagIndex),
+      query: req.query,
     });
-    res.json({tagIndex: tagIndex, tagName: r.tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
+    // count/hour/distHour/distHourFine are sample counts — nothing to convert.
+    const tagName = r.tagName === null ? null : displayName('CSH', tagIndex, r.tagName);
+    res.json({tagIndex: tagIndex, tagName: tagName, date_before:tbf, date_after:taf, count: r.count, hour: r.hour, distHour: r.distHour, distHourFine: r.distHourFine, ...(r.fillGapsMeta ? { fillGaps: r.fillGapsMeta } : {})});
   } catch (err) {
     console.error('Database query error:', err);
     res.status(500).send('Server error');

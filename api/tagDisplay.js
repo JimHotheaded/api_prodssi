@@ -10,8 +10,12 @@
  * Keyed by plant so another machine can be added later without touching the
  * routes. **Adding a plant here changes that plant's wire format** (TagName and
  * Val), so treat it like any other downstream-visible change. Plants absent
- * from the table pass through untouched, which is every plant but RRM, OFIL and
- * Silo today.
+ * from the table pass through untouched, which is every plant but RRM, OFIL,
+ * CSH and Silo today.
+ *
+ * A plant's map need not cover every tag: CSH maps only 3 of its 21, and the
+ * unmapped ones fall back to the historian's own name at divisor 1, exactly as
+ * if the plant were absent from the table.
  *
  * Scaling divides without rounding — precision is preserved and the values stay
  * exactly raw/divisor (137 -> 1.37, an average of 142.65 -> 1.4265).
@@ -43,6 +47,28 @@ const TAG_DISPLAY = {
     2: { name: 'Rotary_Screen3_OutputFreq', divisor: 100 },
     3: { name: 'Rotary_Screen4_OutputFreq', divisor: 100 },
     4: { name: 'Rotary_Screen5_OutputFreq', divisor: 100 },
+  },
+  // Crushing. A PARTIAL block: only these three tags are mapped — tags 0-7 and
+  // 9-18 are deliberately absent and pass through with their raw historian name
+  // and raw value, exactly as before this block existed.
+  //
+  // Both OutputFreq tags come off [PLC_Crushing] drives that publish frequency
+  // in hundredths of a Hz (3300 = 33.00 Hz, 5000 = 50.00 Hz at the VFD max), the
+  // same encoding as every OFIL tag. Verified against the value distribution
+  // rather than assumed: the steady readings are all round hundreds
+  // (0/2200/2600/3300/4000/5000) with only rare intermediate ramp samples.
+  //
+  // NOTE tag 8 was served RAW from 2025-09-02 until 2026-09-01, so scaling it is
+  // a breaking wire-format change for anything already dividing it downstream
+  // (~3M rows of history). Chosen deliberately so both CSH frequency tags read
+  // in the same units. Tags 19/20 were added 2026-08-31 and had no consumers.
+  CSH: {
+    8:  { name: 'Grizzly_Hz',   divisor: 100 },
+    19: { name: 'Screen_Hz',    divisor: 100 },
+    // Loadcell real, already in engineering units — rename only. Its sibling
+    // BRS_REAL[01] (the whole of LC_CSH) spans -1206..25494, a different scale
+    // entirely, so don't infer a shared divisor from the shared BRS_REAL name.
+    20: { name: 'Hopper_level', divisor: 1 },
   },
   // Silo levels and weights, gathered from four PLCs into one database. This is
   // a RENAME-ONLY block — every divisor is 1, because these tags are already
@@ -86,6 +112,13 @@ const TAG_DISPLAY = {
     25: { name: 'SILO3_WEIGHT',    divisor: 1 },
     26: { name: 'SILO41_WEIGHT',   divisor: 1 },
     27: { name: 'SILO42_WEIGHT',   divisor: 1 },
+    // Added to the historian 2026-08-31 15:32:34, off a fifth PLC (SILO1_2).
+    // Level only — no matching weight tags exist. These raw names already
+    // identify their silo correctly (unlike tags 24-27); they are renamed only
+    // to keep the "_LEVEL" spelling uniform across the plant.
+    28: { name: 'SILO21_LEVEL',    divisor: 1 },
+    29: { name: 'SILO22_LEVEL',    divisor: 1 },
+    30: { name: 'SILO23_LEVEL',    divisor: 1 },
   },
 };
 

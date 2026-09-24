@@ -8,10 +8,13 @@
 //   3. /count* returns 400 on missing/non-numeric threshold
 //   4. /BM2_con/:tagIndex/:tbf/:taf/avg works here (200) while production
 //      still 500s on it (copy-paste typo "TagIndex <> 'E'" fixed in this copy)
-//   5. RRM is served through the display layer (api/tagDisplay.js): friendly
-//      tag names and values in engineering units. Not waved through — the
-//      production body is put through the same transform and must then match
-//      this copy exactly, so the rename and the divisors are actually verified.
+//   5. RRM and CSH are served through the display layer (api/tagDisplay.js):
+//      friendly tag names and values in engineering units. Not waved through —
+//      the production body is put through the same transform and must then
+//      match this copy exactly, so the rename and the divisors are actually
+//      verified. CSH is only PARTIALLY mapped (tags 8/19/20), which the shared
+//      transform handles for free: unmapped tags convert to themselves, so a
+//      regression that scaled the whole plant would show as UNEXPECTED here.
 // Live endpoints (/{plant}, /all, latest value) race against ~10s logging:
 // fetch both servers in parallel and retry a mismatch up to 3x before
 // declaring it real.
@@ -33,42 +36,53 @@ const stats = { identical: 0, retried: 0, expected: 0, unexpected: 0 };
 const unexpectedDetails = [];
 const expectedNotes = [];
 
-// --- RRM display layer (expected diff #5) ---------------------------------
+// --- display layer (expected diff #5) --------------------------------------
 const { presentRows, presentTagList, presentWindow, displayName, scaleValue } =
   require('../../api/tagDisplay');
 
-const isRrmPath = path => /^\/RRM(\/|$)/.test(path) || path.startsWith('/countRRM');
-const rrmTagIndex = path => {
-  const m = path.match(/^\/RRM\/([^/?]+)/) || path.match(/[?&]tagIndex=([^&]+)/);
+// Plants in api/tagDisplay.js that this script also exercises. OFIL and Silo
+// are deliberately absent from STD_PLANTS (production 404s on them), so they
+// are covered by their own in-process scripts instead. Add a plant here when
+// it joins both the display table and STD_PLANTS.
+const DISPLAY_PLANTS = ['RRM', 'CSH'];
+
+// Which display plant, if any, a path belongs to — replaces the old hardcoded
+// /^\/RRM/ match so a second display plant needs no new branches.
+const displayPlantFor = path => DISPLAY_PLANTS.find(p =>
+  new RegExp(`^/${p}(/|$)`).test(path) || path.startsWith(`/count${p}`)) || null;
+
+const pathTagIndex = (path, plant) => {
+  const m = path.match(new RegExp(`^/${plant}/([^/?]+)`)) || path.match(/[?&]tagIndex=([^&]+)/);
   return m ? m[1] : null;
 };
 
 // Put a production body through the same transform this copy applies, so the
 // comparison proves the rename/scaling rather than merely tolerating a diff.
-function applyRrmDisplay(body, tagIndex) {
+function applyDisplay(plant, body, tagIndex) {
   if (Array.isArray(body)) {
-    return body.length && 'Val' in body[0] ? presentRows('RRM', body)
-                                           : presentTagList('RRM', body);
+    return body.length && 'Val' in body[0] ? presentRows(plant, body)
+                                           : presentTagList(plant, body);
   }
   if (body && typeof body === 'object') {
-    if (Array.isArray(body.readings)) return presentWindow('RRM', body);
+    if (Array.isArray(body.readings)) return presentWindow(plant, body);
     const out = { ...body };
     // count/hour/distHour are sample counts — unaffected by the unit change.
     if ('tagName' in out && out.tagName !== null) {
-      out.tagName = displayName('RRM', tagIndex, out.tagName);
+      out.tagName = displayName(plant, tagIndex, out.tagName);
     }
     for (const k of ['max', 'min', 'avg']) {
-      if (k in out) out[k] = scaleValue('RRM', tagIndex, out[k]);
+      if (k in out) out[k] = scaleValue(plant, tagIndex, out[k]);
     }
     return out;
   }
   return body;
 }
 
-function rrmMatchesAfterDisplay(path, p, m) {
-  if (!isRrmPath(path) || p.status !== m.status) return false;
+function matchesAfterDisplay(path, p, m) {
+  const plant = displayPlantFor(path);
+  if (!plant || p.status !== m.status) return false;
   try {
-    const expected = applyRrmDisplay(JSON.parse(p.text), rrmTagIndex(path));
+    const expected = applyDisplay(plant, JSON.parse(p.text), pathTagIndex(path, plant));
     return JSON.stringify(expected) === JSON.stringify(JSON.parse(m.text));
   } catch { return false; }
 }
@@ -90,11 +104,12 @@ async function diffOnce(path, label) {
     console.log(`ok          ${label} (expected: prod 500 bug, fixed in this copy)`);
     return true;
   }
-  // RRM: friendly names + engineering units, verified against the transform
-  if (rrmMatchesAfterDisplay(path, p, m)) {
+  // display layer: friendly names + engineering units, verified via transform
+  if (matchesAfterDisplay(path, p, m)) {
+    const plant = displayPlantFor(path);
     stats.expected++;
-    expectedNotes.push(`${label}: RRM display layer (renamed tag + scaled values) matches exactly`);
-    console.log(`ok          ${label} (expected: RRM renamed/scaled, transform verified)`);
+    expectedNotes.push(`${label}: ${plant} display layer (renamed tag + scaled values) matches exactly`);
+    console.log(`ok          ${label} (expected: ${plant} renamed/scaled, transform verified)`);
     return true;
   }
   stats.unexpected++;
@@ -112,10 +127,11 @@ async function diffLive(path, label, tries = 4) {
       else stats.identical++;
       return true;
     }
-    if (rrmMatchesAfterDisplay(path, p, m)) {
+    if (matchesAfterDisplay(path, p, m)) {
+      const plant = displayPlantFor(path);
       stats.expected++;
-      expectedNotes.push(`${label}: RRM display layer (renamed tag + scaled values) matches exactly`);
-      console.log(`ok          ${label} (expected: RRM renamed/scaled, transform verified)`);
+      expectedNotes.push(`${label}: ${plant} display layer (renamed tag + scaled values) matches exactly`);
+      console.log(`ok          ${label} (expected: ${plant} renamed/scaled, transform verified)`);
       return true;
     }
     if (i === tries) {
@@ -143,9 +159,9 @@ async function main() {
       const pt = tagObjs(pj), mt = tagObjs(mj);
       const keys = new Set([...Object.keys(pt), ...Object.keys(mt)]);
       for (const k of keys) {
-        // RRM's listing carries the friendly names; compare against the
-        // transform so the rename is verified here too.
-        const expected = k === 'RRM' ? presentTagList('RRM', pt[k]) : pt[k];
+        // A display plant's listing carries the friendly names; compare
+        // against the transform so the rename is verified here too.
+        const expected = DISPLAY_PLANTS.includes(k) ? presentTagList(k, pt[k]) : pt[k];
         if (JSON.stringify(expected) !== JSON.stringify(mt[k])) ok = false;
       }
       docDiff = p.text !== m.text;

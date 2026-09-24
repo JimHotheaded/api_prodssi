@@ -37,7 +37,7 @@ const HOUR = ['2026-08-14 16:00:00.000', '2026-08-14 17:00:00.000'];
 // Before the database existed: every route must degrade like any other plant.
 const EMPTY = ['2026-08-01 00:00:00.000', '2026-08-01 01:00:00.000'];
 
-const TAG_COUNT = 28;
+const TAG_COUNT = 31;
 // The full display map, as supplied by the plant 2026-08-14. Spelled out rather
 // than imported from api/tagDisplay.js so a typo there fails this test instead
 // of agreeing with itself.
@@ -57,12 +57,18 @@ const NAMES = {
   22: 'SILO43_WEIGHT',  23: 'SILO44_WEIGHT',
   24: 'SILO1_WEIGHT',   25: 'SILO3_WEIGHT',
   26: 'SILO41_WEIGHT',  27: 'SILO42_WEIGHT',
+  // Level-only tags added off the SILO1_2 PLC 2026-08-31.
+  28: 'SILO21_LEVEL',   29: 'SILO22_LEVEL',
+  30: 'SILO23_LEVEL',
 };
-// One per source PLC — the four raw names most likely to leak through if the
+// One per source PLC — the five raw names most likely to leak through if the
 // display layer is skipped on some route.
-const SPOT = [0, 12, 18, 26];
+const SPOT = [0, 12, 18, 26, 28];
 // Fragments of the raw historian names. None may appear anywhere on the wire.
-const RAW_FRAGMENTS = ['Coating7_Con', 'SiemensOPC', 'PLC_Ofil', 'RaymondMill\\', 'Net_Weight', 'LOADCELL'];
+// 'SILO1_2\' and '_Level' are the tag 28-30 giveaways; the renamed form spells
+// LEVEL in caps, so the mixed-case fragment cannot match it by accident.
+const RAW_FRAGMENTS = ['Coating7_Con', 'SiemensOPC', 'PLC_Ofil', 'RaymondMill\\', 'Net_Weight', 'LOADCELL',
+                       'SILO1_2\\', '_Level'];
 // Counts every logged sample regardless of silo state, so `hour` measures the
 // divisor rather than how full the silo happened to be.
 const ALL = -99999;
