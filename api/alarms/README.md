@@ -59,6 +59,7 @@ millisecond may order differently than before.
 | `LimitValue` | float\|null | Alarm limit that was crossed (null for info events) |
 | `Active` | bool\|null | Alarm currently active at event time |
 | `Acked` | bool\|null | Alarm acknowledged at event time |
+| `GroupPath` | string | Plant/area (`/recent` and `/active` only), same values as `/groups` |
 
 ---
 
@@ -119,7 +120,8 @@ was busier than the cap and the oldest events of the hour were cut off).
       "InputValue": 1,
       "LimitValue": 0,
       "Active": false,
-      "Acked": true
+      "Acked": true,
+      "GroupPath": "Ball Mill.Alarm_BallMill"
     }
   ]
 }

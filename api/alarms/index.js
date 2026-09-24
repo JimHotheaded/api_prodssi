@@ -104,7 +104,7 @@ router.get('/recent', alarmRoute(async (req, res, pool) => {
     SELECT TOP (${limit.value})
         DATEADD(HOUR, ${PLANT_TZ_OFFSET_HOURS}, EventTimeStamp) AS EventTimeStamp,
         SourceName, ConditionName, SubConditionName,
-        Severity, Priority, Message, InputValue, LimitValue, Active, Acked
+        Severity, Priority, Message, InputValue, LimitValue, Active, Acked, GroupPath
     FROM dbo.AllEvent
     WHERE (${excl.value} = 0 OR Message NOT LIKE 'Alarm fault%' OR Message IS NULL)
       AND (${source} IS NULL OR SourceName = ${source})
